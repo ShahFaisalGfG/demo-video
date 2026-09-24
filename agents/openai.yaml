@@ -1,0 +1,6 @@
+interface:
+  display_name: "Demo Video"
+  short_description: "Create polished demos and step-by-step video tutorials"
+  default_prompt: "Use $demo-video to create a clear tutorial with Piper narration, focused interactions, and synchronized captioned and clean video versions."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,8 @@
+{
+  "capture": { "type": "desktop", "videoSize": "1280x720", "input": "desktop" },
+  "steps": [
+    { "action": "wait", "ms": 50 },
+    { "action": "move", "xRatio": 0.5, "yRatio": 0.5 },
+    { "action": "press", "key": "escape" }
+  ]
+}

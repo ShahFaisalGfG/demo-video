@@ -1,0 +1,82 @@
+{
+  "url": "${DEMO_BASE_URL}",
+  "viewport": { "width": 1920, "height": 1080 },
+  "outputSize": { "width": 2560, "height": 1440 },
+  "outputFormat": "mp4",
+  "cursor": { "style": "pointer", "size": 42 },
+  "chrome": { "url": "Product walkthrough" },
+  "background": { "color": "#0b1020", "borderRadius": 16, "padding": 32 },
+  "narrationConfig": {
+    "engine": "piper",
+    "piperVoice": "en_US-ryan-medium",
+    "fallbackEngine": null,
+    "cacheNarration": true,
+    "speaker": "MALE",
+    "speed": 1.0,
+    "bufferMs": 500,
+    "actionOverheadMs": 900,
+    "maxSentenceWords": 28,
+    "audioMastering": true,
+    "voiceCandidates": [],
+    "voiceSelection": {
+      "mode": "cached-asr",
+      "sampleWords": 42,
+      "asrModel": "tiny.en"
+    },
+    "pronunciations": {
+      "PRODUCT_NAME": "Product Name"
+    }
+  },
+  "quality": {
+    "recorder": "owned",
+    "encoder": "libx264",
+    "trimLeadingLoading": true,
+    "allowedInternalBlankMs": 2000,
+    "requireEvidence": true,
+    "cacheVisualCapture": false,
+    "pacingAnalysis": false
+  },
+  "evidence": [
+    {
+      "name": "final-result",
+      "selector": "REPLACE_WITH_RESULT_SELECTOR",
+      "state": "visible"
+    }
+  ],
+  "steps": [
+    {
+      "action": "wait",
+      "ms": 500,
+      "narration": "Welcome. Let us take a quick look at how it works."
+    },
+    {
+      "action": "click",
+      "selector": "REPLACE_WITH_VERIFIED_SELECTOR",
+      "narration": "First, open the workflow.",
+      "framingSelectors": [
+        { "selector": "REPLACE_WITH_SECTION_SELECTOR", "minVisibleRatio": 0.85 }
+      ]
+    },
+    {
+      "action": "zoom",
+      "selector": "REPLACE_WITH_SECTION_SELECTOR",
+      "scale": 1.4,
+      "duration": 700
+    },
+    {
+      "action": "assert",
+      "selector": "REPLACE_WITH_RESULT_SELECTOR",
+      "kind": "visible"
+    },
+    {
+      "action": "wait",
+      "ms": 1200,
+      "narration": "The completed result is now visible."
+    },
+    {
+      "action": "zoom",
+      "scale": 1,
+      "duration": 700
+    }
+  ]
+}

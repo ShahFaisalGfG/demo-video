@@ -1,0 +1,33 @@
+{
+  "capture": {
+    "type": "desktop",
+    "fps": 10,
+    "startDelayMs": 250,
+    "endDelayMs": 250,
+    "platforms": {
+      "win32": { "input": "desktop" },
+      "linux": { "input": ":0.0", "videoSize": "1280x720" },
+      "darwin": { "input": "1:none" }
+    }
+  },
+  "outputSize": { "width": 1280, "height": 720 },
+  "narrationConfig": {
+    "engine": "tiny-tts",
+    "strictNarration": true,
+    "audioMastering": true,
+    "bufferMs": 250
+  },
+  "quality": {
+    "trimLeadingLoading": false,
+    "allowedInternalBlankMs": 3000,
+    "encoder": "libx264",
+    "pacingAnalysis": false
+  },
+  "steps": [
+    {
+      "action": "wait",
+      "ms": 900,
+      "narration": "Desktop capture is ready."
+    }
+  ]
+}

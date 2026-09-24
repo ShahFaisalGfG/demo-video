@@ -1,0 +1,13 @@
+{
+  "capture": {
+    "type": "desktop",
+    "fps": 10,
+    "input": "desktop",
+    "startDelayMs": 250,
+    "endDelayMs": 250,
+    "failSafe": true
+  },
+  "steps": [
+    { "action": "wait", "ms": 600 }
+  ]
+}

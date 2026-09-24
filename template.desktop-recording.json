@@ -1,0 +1,51 @@
+{
+  "capture": {
+    "type": "desktop",
+    "fps": 30,
+    "platforms": {
+      "win32": { "input": "desktop" },
+      "linux": { "input": ":0.0", "videoSize": "1920x1080" },
+      "darwin": { "input": "1:none" }
+    },
+    "startDelayMs": 900,
+    "endDelayMs": 700,
+    "failSafe": true
+  },
+  "outputSize": { "width": 1920, "height": 1080 },
+  "narrationConfig": {
+    "engine": "piper",
+    "piperVoice": "en_US-ryan-medium",
+    "fallbackEngine": null,
+    "cacheNarration": true,
+    "strictNarration": true,
+    "audioMastering": true
+  },
+  "quality": {
+    "encoder": "auto",
+    "allowedInternalBlankMs": 2000,
+    "pacingAnalysis": false
+  },
+  "steps": [
+    {
+      "action": "wait",
+      "ms": 800,
+      "narration": "The application is open and ready."
+    },
+    {
+      "action": "imageClick",
+      "image": "REPLACE_WITH_REFERENCE_IMAGE.png",
+      "confidence": 0.9,
+      "narration": "Open the requested section."
+    },
+    {
+      "action": "assertImage",
+      "image": "REPLACE_WITH_RESULT_IMAGE.png",
+      "confidence": 0.9
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "narration": "The expected result is visible."
+    }
+  ]
+}

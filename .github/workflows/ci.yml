@@ -1,0 +1,53 @@
+name: Demo video skill CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bootstrap isolated runtime
+        run: node scripts/bootstrap.mjs
+      - name: Check platform capabilities
+        shell: bash
+        run: node "$HOME/.demo_video/scripts/doctor.mjs" --json
+      - name: Run recorder, encoder, narration, and GOP tests
+        shell: bash
+        run: node "$HOME/.demo_video/scripts/self-test.mjs"
+      - name: Validate desktop definition
+        run: python scripts/desktop-runner.py tests/desktop-smoke.recording.json --validate
+      - name: Check paired delivery and narration revisions
+        shell: bash
+        run: node "$HOME/.demo_video/scripts/release-test.mjs"
+      - name: Build portable release archive
+        run: python scripts/package-skill.py . dist-test
+
+  ocr-evidence:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bootstrap isolated runtime
+        run: node scripts/bootstrap.mjs
+      - name: Run OCR evidence test
+        shell: pwsh
+        run: node "$HOME/.demo_video/scripts/self-test.mjs" --with-ocr

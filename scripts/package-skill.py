@@ -25,7 +25,7 @@ def main() -> None:
         raise ValueError("Skill root must contain SKILL.md.")
     version = (skill / "VERSION").read_text(encoding="utf-8").strip()
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"demo-video-{version}.zip"
+    archive = output / f"demo-video_{version}_skill.zip"
     files = sorted(path for path in skill.rglob("*") if path.is_file() and included(path.relative_to(skill)))
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
         for file in files:

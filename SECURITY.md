@@ -6,7 +6,7 @@ Security corrections target the latest published release.
 
 ## Reporting
 
-Report suspected command injection, unsafe path handling, credential exposure, untrusted model download, or automation-boundary issues privately to the repository maintainer before public disclosure.
+Report suspected command injection, unsafe path handling, credential exposure, untrusted model download, or automation-boundary issues privately to the maintainer, Shah Faisal, at shahfaisalgfg@gmail.com before public disclosure.
 
 ## Operating guidance
 

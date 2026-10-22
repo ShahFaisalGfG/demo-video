@@ -1,0 +1,83 @@
+name: Build and Release
+
+# Triggered by pushing a version tag, e.g.: git tag v1.5.0 && git push origin v1.5.0
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+jobs:
+  # The release files are named after VERSION and the release after the tag, so the two must
+  # agree, and the release notes for that version must exist. Checked before the CI suite.
+  version:
+    runs-on: ubuntu-latest
+
+    outputs:
+      ver: ${{ steps.meta.outputs.VER }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches the version
+        id: meta
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver=$(tr -d '[:space:]' < VERSION)
+          if [ "$TAG" != "v$ver" ]; then
+            echo "::error::Tag $TAG does not match VERSION (v$ver)."
+            exit 1
+          fi
+          if [ ! -f "release_notes/release_notes_v$ver.md" ]; then
+            echo "::error::release_notes/release_notes_v$ver.md is missing."
+            exit 1
+          fi
+          echo "VER=$ver" >> "$GITHUB_OUTPUT"
+
+  # The full cross-platform suite from ci.yml: bootstrap, self-test, release test, OCR evidence.
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # gh release create
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      # Deterministic zip with one top-level demo-video folder, its SHA-256 file, and a manifest.
+      - name: Package the skill
+        run: python scripts/package-skill.py . dist
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VER: ${{ needs.version.outputs.ver }}
+        run: |
+          gh release create "$TAG" \
+            --title "Demo Video v$VER" \
+            --notes-file "release_notes/release_notes_v$VER.md" \
+            "dist/demo-video_${VER}_skill.zip" \
+            "dist/demo-video_${VER}_skill.zip.sha256" \
+            "dist/release-manifest.json"

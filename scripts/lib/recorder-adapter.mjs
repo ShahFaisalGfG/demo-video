@@ -3,6 +3,16 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { hideCursor, recordPage, showCursor } from 'testreel';
 
+const RECORDING_FILES = new Set(['.webm', '.mp4', '.gif', '.png', '.json']);
+
+function cleanOutput(outputDir) {
+  for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
+    if (entry.isFile() && RECORDING_FILES.has(path.extname(entry.name).toLowerCase())) {
+      fs.rmSync(path.join(outputDir, entry.name));
+    }
+  }
+}
+
 function resolveVars(value) {
   if (typeof value !== 'string') return value;
   return value.replace(/\$\{?([A-Z0-9_]+)\}?/g, (_, variable) => process.env[variable] ?? '');
@@ -178,6 +188,7 @@ export async function recordDefinition(definitionPath, options = {}) {
     : structuredClone(definitionPath);
   const outputDir = options.outputDir ?? './testreel-output';
   fs.mkdirSync(outputDir, { recursive: true });
+  if (options.clean) cleanOutput(outputDir);
   const browser = await chromium.launch({ headless: options.headless ?? true });
   const stateCandidate = definition.storageState ? path.resolve(resolveVars(definition.storageState)) : undefined;
   let state = stateCandidate && fs.existsSync(stateCandidate) ? stateCandidate : undefined;
@@ -239,7 +250,6 @@ export async function recordDefinition(definitionPath, options = {}) {
     const recorder = await recordPage(page, {
       outputDir,
       name: path.basename(typeof definitionPath === 'string' ? definitionPath : 'recording', '.json'),
-      clean: options.clean ?? false,
       cursor: definition.cursor,
       chrome: definition.chrome,
       background: definition.background,

@@ -6,6 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D4.svg)](#platform-coverage)
+[![Latest Release](https://img.shields.io/github/v/release/ShahFaisalGfG/demo-video?color=brightgreen&label=Latest%20Release)](https://github.com/ShahFaisalGfG/demo-video/releases/latest)
 [![Agents](https://img.shields.io/badge/Agents-Claude%20Code%20%7C%20Codex%20%7C%20Cursor-8A2BE2.svg)](#supported-agents)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933.svg?logo=nodedotjs&logoColor=white)](#requirements)
 
@@ -13,7 +14,7 @@
 
 ---
 
-Demo Video is a portable [Agent Skill](SKILL.md) that turns a website or desktop workflow into a polished MP4. Your coding agent writes a recording definition, records the flow through Playwright or native screen capture, narrates it with a local Piper voice, adds synchronized captions, and checks the encoded video for the evidence the narration promises. Everything runs on your machine, in an isolated runtime that never touches the project being demonstrated.
+Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that turns a website or desktop workflow into a polished MP4. Your coding agent writes a recording definition, records the flow through Playwright or native screen capture, narrates it with a local Piper voice, adds synchronized captions, and checks the encoded video for the evidence the narration promises. Everything runs on your machine, in an isolated runtime that never touches the project being demonstrated.
 
 > *Show it. Say it. Prove it.*
 
@@ -239,11 +240,14 @@ The [Build and Release](.github/workflows/build-release.yml) workflow checks tha
 
 ## Contributing
 
-1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Make your changes and run the checks in [Development & Tests](#development--tests)
-3. Commit with a clear message and open a **Pull Request** targeting `main`
+Contributions are welcome - bug reports, fixes, new capture sources, voices, or a clearer sentence in the docs.
 
-Keep credentials, client recordings, and generated media out of commits.
+1. **Fork** the repository and clone your fork
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Make your changes and run the checks in [Development & Tests](#development--tests)
+4. Commit with a clear message and open a **Pull Request** targeting `main`
+
+Keep credentials, client recordings, and generated media out of commits. For significant changes, please [open an issue](https://github.com/ShahFaisalGfG/demo-video/issues) first to discuss the approach.
 
 ---
 
@@ -273,10 +277,15 @@ Built with ❤️ by **Shah Faisal** · [Portfolio](https://shahfaisalgfg.github
 
 ## Support the Project
 
+Demo Video is free and will always stay free. If it saved you an afternoon of recording and editing, here are a few ways to give back:
+
 - ⭐ **Star the repo** - it helps others find the project
 - 🐛 **Report a bug** - a flow that won't record is worth an issue
 - 💡 **Suggest a feature** - a new capture source, voice, or delivery format
+- 🔁 **Share it** - tell a friend or a team that ships demos
 - 🛠️ **Contribute code** - see [Contributing](#contributing)
+
+**[★ Star Demo Video on GitHub](https://github.com/ShahFaisalGfG/demo-video)**
 
 ---
 

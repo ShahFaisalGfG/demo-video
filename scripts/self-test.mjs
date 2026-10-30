@@ -12,7 +12,7 @@ import { selectEncoder } from './lib/encoder.mjs';
 import { masterAudio } from './lib/audio-mastering.mjs';
 import { selectVoice } from './lib/voice-selection.mjs';
 import { disposeSynthesizer } from './lib/synthesize.mjs';
-import { humanPath, seededRandom } from './lib/human-cursor.mjs';
+import { HumanCursor, boxCenter, decodePng, humanPath, seededRandom } from './lib/human-cursor.mjs';
 import { alignEnvReady, alignPython } from './lib/align-venv.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-video-self-test-'));
@@ -21,7 +21,15 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = browsersDir(demoVideoHome());
 const pageHtml = '<label><input id="flag" type="checkbox">Enable</label>' +
   '<button id="go" onclick="fetch(\'/api\',{method:\'POST\'}).then(()=>' +
   'document.getElementById(\'status\').textContent=\'Done\')">Run</button><h1 id="status">Ready</h1>';
+const framedHtml = '<button id="inner" style="cursor:pointer">Framed</button>';
+const cursorHtml = `<body style="margin:0;background:#fff"><iframe id="frame" srcdoc='${framedHtml}'
+  style="margin:120px 0 0 300px;width:240px;height:80px"></iframe></body>`;
 const server = http.createServer((request, response) => {
+  if (request.url === '/cursor' || request.url === '/other') {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(request.url === '/cursor' ? cursorHtml : '<body style="margin:0;background:#fff"><p>Other origin</p></body>');
+    return;
+  }
   if (request.url === '/v1/chat/completions' && request.method === 'POST') {
     response.writeHead(200, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ choices: [{ message: { content:
@@ -61,8 +69,10 @@ try {
     outputFormat: 'mp4',
     background: { color: '#0b1020', padding: 16 },
     steps: [
+      { action: 'zoom', selector: '#flag', scale: 1.6, duration: 500 },
       { action: 'check', selector: '#flag' },
       { action: 'assert', selector: '#flag', kind: 'checked' },
+      { action: 'zoom', scale: 1, duration: 500 },
       { action: 'if', condition: { selector: '#flag', state: 'checked' },
         then: [{ action: 'clickResponse', selector: '#go', urlPattern: '/api', method: 'POST', status: 202 }] },
       { action: 'assert', selector: '#status', kind: 'text', text: 'Done' },
@@ -83,6 +93,41 @@ try {
     () => { throw new Error('Linear cursor motion accepted more moves than testreel can composite.'); },
     (error) => { if (!/at most 48/.test(error.message)) throw error; },
   );
+
+  const { chromium } = await import('playwright');
+  const cursorBrowser = await chromium.launch();
+  try {
+    const context = await cursorBrowser.newContext({ viewport: { width: 800, height: 500 } });
+    await HumanCursor.install(context, { idleHide: false });
+    const page = await context.newPage();
+    const cursor = new HumanCursor(page, { width: 800, height: 500 }, 'self-test', { idleHide: false });
+    await page.goto(`${selfTestUrl}/cursor`);
+    const framed = page.frameLocator('#frame').locator('#inner');
+    if (await framed.evaluate((element) => window.__demoVideoCursorStyle?.(element)) !== 'pointer') {
+      throw new Error('Frames must report the cursor style of their own elements.');
+    }
+    await cursor.moveTo(framed);
+    await cursor.zoom(await boxCenter(framed), 1.5, 400);
+    const zoomedScale = cursor.scale;
+    await cursor.zoom(null, 1, 400);
+    if (Math.abs(zoomedScale - 1.5) > 0.02 || Math.abs(cursor.scale - 1) > 0.02) {
+      throw new Error(`Pinch zoom must reach 1.5 and return to 1, saw ${zoomedScale} and ${cursor.scale}.`);
+    }
+    await page.goto(`http://localhost:${address.port}/other`);
+    await page.waitForTimeout(400);
+    const { x, y } = cursor.position;
+    const shot = await page.screenshot({ clip: { x: x - 4, y: y - 4, width: 40, height: 40 } });
+    const pixels = execFileSync(ffmpegStatic, ['-v', 'error', '-i', 'pipe:0', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
+      { input: shot });
+    if (!pixels.some((value) => value < 80)) throw new Error('The cursor must reappear after a cross-origin navigation.');
+  } finally {
+    await cursorBrowser.close();
+  }
+  const pointerImage = decodePng(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.resolve('testreel'))),
+    'pointer.png')));
+  if (pointerImage.width !== 100 || Buffer.from(pointerImage.data, 'base64').length !== 100 * 100 * 4) {
+    throw new Error('Cursor images must decode to RGBA pixels.');
+  }
 
   const path1 = humanPath({ x: 100, y: 100 }, { x: 1000, y: 600 }, seededRandom(7), 30);
   const path2 = humanPath({ x: 100, y: 100 }, { x: 1000, y: 600 }, seededRandom(7), 30);

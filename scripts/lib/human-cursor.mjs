@@ -1,4 +1,4 @@
-// Human-like cursor motion for browser recordings.
+// Human-like cursor motion and zoom for browser recordings.
 //
 // testreel composites its cursor as straight, constant-speed lines, and its
 // FFmpeg expression nests once per move, which fails after about 48 moves and
@@ -7,7 +7,13 @@
 // frame without a move limit, and moves it the way a hand does: a curved arc,
 // minimum-jerk speed (slow start, fast middle, gentle landing), Fitts-law
 // timing (longer reaches take longer), and a small overshoot and settle on long
-// reaches. A seeded generator gives the same path for the same layout on every render.
+// reaches. A seeded generator gives the same path for the same layout.
+//
+// Zoom uses Chromium's own pinch zoom, which magnifies the visible area without
+// changing layout, so fixed headers and dialogs move with the content like a
+// camera zoom. Under pinch zoom, Playwright boxes and mouse events share one
+// coordinate space (page coordinates minus the visual viewport offset), while
+// the drawn cursor lives in page coordinates; this module converts between them.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -17,7 +23,9 @@ import { createRequire } from 'node:module';
 
 const STYLES = ['default', 'pointer', 'text', 'touch'];
 const HOTSPOTS = { default: { x: 0, y: 0 }, pointer: { x: 0.38, y: 0.2 }, text: { x: 0.5, y: 0.5 }, touch: { x: 0.5, y: 0.5 } };
-const NAVIGATION_ERROR = /Execution context was destroyed|navigation|has been closed/i;
+const NAVIGATION_ERROR = /Execution context was destroyed|navigation|has been closed|detached|Target closed/i;
+// Chromium's synthetic pinch moves two fingers about this far per unit of scale change; speed = travel / duration.
+const PINCH_TRAVEL_PX = 205;
 
 /** Browser actions that move the cursor to their selector before acting. */
 export const POINTER_ACTIONS = ['click', 'clickResponse', 'type', 'fill', 'clear', 'select', 'hover', 'check', 'uncheck'];
@@ -58,19 +66,19 @@ function minimumJerk(t) {
 }
 
 /**
- * Plan a reach from `from` to `to`: returns its duration and positions sampled at equal time steps.
- * `size` is the target's smaller side, which shortens reaches to large targets.
+ * Plan a reach from `from` to `to` in page coordinates: returns its duration and positions at equal time steps.
+ * `size` is the target's smaller side and `scale` the zoom level, so timing follows the on-screen distance.
  */
-export function humanPath(from, to, random, size = 40) {
+export function humanPath(from, to, random, size = 40, scale = 1) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const distance = Math.hypot(dx, dy);
   if (distance < 2) return { durationMs: 0, points: [to] };
-  const durationMs = moveDuration(distance, size);
+  const durationMs = moveDuration(distance * scale, size * scale);
   const unit = { x: dx / distance, y: dy / distance };
-  const bend = (random() * 2 - 1) * Math.min(0.18 * distance, 90);
+  const bend = (random() * 2 - 1) * Math.min(0.18 * distance, 90 / scale);
   const control = { x: from.x + dx * 0.45 - unit.y * bend, y: from.y + dy * 0.45 + unit.x * bend };
-  const overshoot = distance > 280 ? Math.min(distance * 0.025, 10) * (0.6 + random() * 0.4) : 0;
+  const overshoot = distance * scale > 280 ? Math.min(distance * 0.025, 10 / scale) * (0.6 + random() * 0.4) : 0;
   const landing = { x: to.x + unit.x * overshoot, y: to.y + unit.y * overshoot };
   const reach = overshoot ? 0.86 : 1;
   const samples = Math.max(12, Math.round(durationMs / 16));
@@ -91,36 +99,13 @@ export function humanPath(from, to, random, size = 40) {
   return { durationMs, points };
 }
 
-/** Runs inside every page: draws the cursor in a closed shadow root and animates it along planned paths. */
+/**
+ * Runs in every frame. Each frame gets `__demoVideoCursorStyle(element)`, the cursor an element shows; the top
+ * frame also draws the cursor in a closed shadow root and animates it along planned paths in page coordinates.
+ */
 function cursorOverlay(settings) {
-  if (window.top !== window || window.__demoVideoCursor) return;
-  const KEY = '__demoVideoCursor';
-  const saved = (() => {
-    try {
-      return JSON.parse(sessionStorage.getItem(KEY));
-    } catch {
-      return null;
-    }
-  })();
-  const state = { x: -200, y: -200, style: 'default', visible: true, idle: false, ...saved };
-  let host;
-  let shadow;
-  let sprite;
-  let shown;
-  const canvases = {};
-  let idleTimer = 0;
-
-  const save = () => {
-    try {
-      sessionStorage.setItem(KEY, JSON.stringify(state));
-    } catch {
-      // Storage can be unavailable on opaque origins; the cursor then starts from its default spot.
-    }
-  };
-
-  const styleAt = (x, y) => {
+  const styleOf = (element) => {
     if (settings.style === 'touch') return 'touch';
-    const element = document.elementFromPoint(x, y);
     if (!element) return 'default';
     const css = getComputedStyle(element).cursor;
     if (css === 'pointer' || css === 'text') return css;
@@ -135,6 +120,39 @@ function cursorOverlay(settings) {
       return ['text', 'search', 'url', 'tel', 'email', 'password', 'number', ''].includes(type) ? 'text' : 'pointer';
     }
     return 'default';
+  };
+  if (!window.__demoVideoCursorStyle) Object.defineProperty(window, '__demoVideoCursorStyle', { value: styleOf });
+  if (window.top !== window || window.__demoVideoCursor) return;
+
+  const state = { x: -200, y: -200, style: 'default', visible: true, idle: false };
+  let host;
+  let shadow;
+  let sprite;
+  let shown;
+  const canvases = {};
+  let idleTimer = 0;
+  let moving = false;
+
+  // The cursor for a page point, looking inside same-origin frames; null over a cross-origin frame it cannot read.
+  const styleAt = (x, y) => {
+    let view = document;
+    let element = view.elementFromPoint(x, y);
+    while (element && /^i?frame$/i.test(element.tagName)) {
+      let inner;
+      try {
+        inner = element.contentDocument;
+      } catch {
+        inner = null;
+      }
+      if (!inner) return null;
+      const box = element.getBoundingClientRect();
+      const css = getComputedStyle(element);
+      x -= box.left + element.clientLeft + parseFloat(css.paddingLeft);
+      y -= box.top + element.clientTop + parseFloat(css.paddingTop);
+      view = inner;
+      element = view.elementFromPoint(x, y);
+    }
+    return styleOf(element);
   };
 
   const mount = () => {
@@ -168,7 +186,7 @@ function cursorOverlay(settings) {
     return true;
   };
 
-  // Viewport point to the host's own coordinates, which a CSS zoom on <html> transforms.
+  // Page point to the host's own coordinates, in case the page itself transforms <html>.
   const toLocal = (x, y) => {
     const origin = host.getBoundingClientRect();
     const transform = getComputedStyle(document.documentElement).transform;
@@ -197,22 +215,23 @@ function cursorOverlay(settings) {
       idleTimer = setTimeout(() => {
         state.idle = true;
         draw();
-        save();
       }, settings.idleHideMs);
     }
-    save();
   };
 
-  const move = (points, durationMs) => new Promise((resolve) => {
+  // `arrival` is the target's own cursor style, read in its frame, which also covers cross-origin frames.
+  const move = (points, durationMs, arrival) => new Promise((resolve) => {
     clearTimeout(idleTimer);
     state.idle = false;
+    moving = true;
     const started = performance.now();
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
       Object.assign(state, points[points.length - 1]);
-      state.style = styleAt(state.x, state.y);
+      state.style = arrival ?? styleAt(state.x, state.y) ?? state.style;
+      moving = false;
       draw();
       rest();
       resolve();
@@ -228,7 +247,7 @@ function cursorOverlay(settings) {
       const fraction = exact - index;
       state.x = points[index].x + (points[index + 1].x - points[index].x) * fraction;
       state.y = points[index].y + (points[index + 1].y - points[index].y) * fraction;
-      state.style = styleAt(state.x, state.y);
+      state.style = styleAt(state.x, state.y) ?? state.style;
       draw();
       setTimeout(frame, 16);
     };
@@ -250,60 +269,38 @@ function cursorOverlay(settings) {
   const setVisible = (visible) => {
     state.visible = visible;
     draw();
-    save();
   };
 
-  Object.defineProperty(window, '__demoVideoCursor', { value: { move, ripple, setVisible } });
+  // Put the cursor back after a page load, where the previous document left it.
+  const place = (point, style, visible, idle) => {
+    Object.assign(state, point, { style, visible, idle });
+    draw();
+    if (!idle) rest();
+  };
+
+  // At rest the shape follows the page as a system cursor does: a dialog closing or a scroll can change what is under it.
+  setInterval(() => {
+    if (moving || !state.visible || state.idle || !host?.isConnected) return;
+    const style = styleAt(state.x, state.y);
+    if (style && style !== state.style) {
+      state.style = style;
+      draw();
+    }
+  }, 250);
+
+  Object.defineProperty(window, '__demoVideoCursor', { value: { move, ripple, setVisible, place } });
   if (!mount()) document.addEventListener('readystatechange', draw, { once: true });
   else draw();
 }
 
 /** Run a page function, ignoring a navigation that replaces the page mid-call (the cursor and zoom are cosmetic). */
-async function evaluateQuietly(page, run, argument) {
+async function evaluateQuietly(target, run, argument) {
   try {
-    return await page.evaluate(run, argument);
+    return await target.evaluate(run, argument);
   } catch (error) {
     if (NAVIGATION_ERROR.test(error.message)) return undefined;
     throw error;
   }
-}
-
-/**
- * Zoom the page toward a viewport point with an eased CSS transform on <html>, which the browser renders sharply;
- * scale 1 returns to the full view and restores the page's own inline styles. A missing point skips a zoom-in.
- */
-export async function zoomPage(page, point, scale = 2, durationMs = 600) {
-  if (scale !== 1 && !point) return;
-  await evaluateQuietly(page, ({ target, level, duration }) => new Promise((resolve) => {
-    const root = document.documentElement;
-    const css = getComputedStyle(root).transform;
-    const current = css && css !== 'none' ? new DOMMatrix(css) : new DOMMatrix();
-    const origin = { x: -scrollX, y: -scrollY };
-    const offset = (axis, size) => {
-      const key = axis === 'x' ? 'e' : 'f';
-      const scaleKey = axis === 'x' ? 'a' : 'd';
-      const unzoomed = origin[axis] + (target[axis] - origin[axis] - current[key]) / current[scaleKey];
-      const wanted = size / 2 - origin[axis] - level * (unzoomed - origin[axis]);
-      return Math.min((1 - level) * origin[axis] * -1, Math.max((1 - level) * (size - origin[axis]), wanted));
-    };
-    if (level !== 1 && !window.__demoVideoZoom) {
-      Object.defineProperty(window, '__demoVideoZoom', { configurable: true, value: {
-        transform: root.style.transform, transformOrigin: root.style.transformOrigin, transition: root.style.transition,
-      } });
-    }
-    const saved = window.__demoVideoZoom;
-    root.style.transformOrigin = '0 0';
-    root.style.transition = `transform ${duration}ms ease-in-out`;
-    root.style.transform = level === 1 ? 'matrix(1, 0, 0, 1, 0, 0)'
-      : `matrix(${level}, 0, 0, ${level}, ${offset('x', innerWidth)}, ${offset('y', innerHeight)})`;
-    setTimeout(() => {
-      if (level === 1) {
-        Object.assign(root.style, saved ?? { transform: '', transformOrigin: '', transition: '' });
-        delete window.__demoVideoZoom;
-      }
-      resolve();
-    }, duration + 50);
-  }), { target: point, level: scale, duration: durationMs });
 }
 
 /** Center of a locator's box in viewport coordinates, or null when it has no box. */
@@ -353,7 +350,7 @@ function cursorImages() {
   return Object.fromEntries(STYLES.map((style) => [style, decodePng(fs.readFileSync(path.join(dist, `${style}.png`)))]));
 }
 
-/** A cursor drawn in the recorded page, moved along human paths before each pointer action. */
+/** A cursor drawn in the recorded page, moved along human paths before each pointer action, with pinch zoom. */
 export class HumanCursor {
   /** Register the overlay on a browser context before its first page opens. */
   static async install(context, options = {}) {
@@ -364,24 +361,52 @@ export class HumanCursor {
       style: options.style ?? 'default',
       rippleSize: options.rippleSize ?? 100,
       rippleColor: options.rippleColor ?? 'rgba(0, 0, 0, 0.4)',
-      idleHideMs: options.idleHide === false ? 0 : options.idleHideMs ?? 3000,
+      idleHideMs: HumanCursor.idleHideMs(options),
       fadeMs: options.fadeMs ?? 400,
     });
   }
 
-  /** `seedSource` is any stable value (such as the definition's steps), so a definition always moves the same way. */
-  constructor(page, viewport, seedSource) {
-    this.page = page;
-    this.position = { x: viewport.width * 0.62, y: viewport.height * 0.72 };
-    const digest = crypto.createHash('sha256').update(JSON.stringify(seedSource ?? null)).digest();
-    this.random = seededRandom(digest.readUInt32LE(0));
-    this.zoomOutPending = false;
-    this.wrapClicks();
+  /** Idle time before the cursor fades, or 0 when it stays visible. */
+  static idleHideMs(options = {}) {
+    return options.idleHide === false ? 0 : options.idleHideMs ?? 3000;
   }
 
-  /** Call one of the overlay's page functions (move, ripple, setVisible). */
+  /** `seedSource` is any stable value (such as the definition's steps), so a layout always moves the same way. */
+  constructor(page, viewport, seedSource, options = {}) {
+    this.page = page;
+    this.viewport = viewport;
+    this.position = { x: viewport.width * 0.62, y: viewport.height * 0.72 };
+    this.style = 'default';
+    this.visible = true;
+    this.idleHideMs = HumanCursor.idleHideMs(options);
+    this.movedAt = 0;
+    this.scale = 1;
+    this.zoomOutPending = false;
+    const digest = crypto.createHash('sha256').update(JSON.stringify(seedSource ?? null)).digest();
+    this.random = seededRandom(digest.readUInt32LE(0));
+    this.wrapClicks();
+    page.on('domcontentloaded', () => this.restore().catch((error) => {
+      console.warn(`[human-cursor] could not restore the cursor after a page load: ${error.message}`);
+    }));
+  }
+
+  /** Call one of the overlay's page functions (move, ripple, setVisible, place). */
   async call(method, ...args) {
     return evaluateQuietly(this.page, ([name, values]) => window.__demoVideoCursor?.[name](...values), [method, args]);
+  }
+
+  /** Visual viewport offset and scale; Playwright boxes and mouse events sit at page coordinates minus the offset. */
+  async view() {
+    const view = await evaluateQuietly(this.page, () => ({ left: visualViewport.offsetLeft, top: visualViewport.offsetTop,
+      scale: visualViewport.scale, width: visualViewport.width, height: visualViewport.height }));
+    return view ?? { left: 0, top: 0, scale: 1, width: this.viewport.width, height: this.viewport.height };
+  }
+
+  /** Put the cursor back where it was after a new document loads, any origin. */
+  async restore() {
+    const idle = this.idleHideMs > 0 && this.movedAt > 0 && Date.now() - this.movedAt > this.idleHideMs;
+    await this.call('place', this.position, this.style, this.visible, idle);
+    this.scale = (await this.view()).scale;
   }
 
   /** Show a click ripple at the moment of every mouse click the recorder sends to the page. */
@@ -396,8 +421,10 @@ export class HumanCursor {
 
   /** Glide to a locator's center (with a small human offset) or to an { x, y } viewport point. */
   async moveTo(target) {
+    const view = await this.view();
     let point = target;
     let size = 40;
+    let arrival;
     if (typeof target.boundingBox === 'function') {
       const box = await target.boundingBox();
       if (!box) return;
@@ -407,11 +434,39 @@ export class HumanCursor {
         x: box.x + box.width / 2 + (this.random() * 2 - 1) * spread,
         y: box.y + box.height / 2 + (this.random() * 2 - 1) * spread,
       };
+      arrival = await evaluateQuietly(target, (element) => window.__demoVideoCursorStyle?.(element));
     }
-    const { durationMs, points } = humanPath(this.position, point, this.random, size);
-    await this.call('move', points, durationMs);
-    this.position = point;
+    const pagePoint = { x: point.x + view.left, y: point.y + view.top };
+    const { durationMs, points } = humanPath(this.position, pagePoint, this.random, size, view.scale);
+    await this.call('move', points, durationMs, arrival ?? null);
+    this.position = pagePoint;
+    this.style = arrival ?? this.style;
+    this.movedAt = Date.now();
     await this.page.mouse.move(point.x, point.y);
+  }
+
+  /**
+   * Pinch-zoom toward a viewport point (scale 1 returns to the full view), taking `durationMs` in total.
+   * The point stays where it is on screen, as under a two-finger pinch; a missing point skips a zoom-in.
+   */
+  async zoom(point, scale = 2, durationMs = 600) {
+    const view = await this.view();
+    const factor = scale / view.scale;
+    if ((scale !== 1 && !point) || Math.abs(factor - 1) < 0.01) return;
+    const anchor = scale === 1 ? { x: view.width / 2, y: view.height / 2 }
+      : { x: Math.min(view.width - 1, Math.max(1, point.x)), y: Math.min(view.height - 1, Math.max(1, point.y)) };
+    const travel = PINCH_TRAVEL_PX * (Math.max(factor, 1 / factor) - 1);
+    const started = Date.now();
+    try {
+      this.cdp ??= await this.page.context().newCDPSession(this.page);
+      await this.cdp.send('Input.synthesizePinchGesture', { x: anchor.x, y: anchor.y, scaleFactor: factor,
+        relativeSpeed: Math.max(1, Math.round(travel / (durationMs / 1000))), gestureSourceType: 'mouse' });
+    } catch (error) {
+      if (!NAVIGATION_ERROR.test(error.message)) throw error;
+    }
+    this.scale = (await this.view()).scale;
+    const remaining = durationMs + 50 - (Date.now() - started);
+    if (remaining > 0) await this.page.waitForTimeout(remaining);
   }
 
   /** Draw a click ripple at the cursor. */
@@ -421,11 +476,13 @@ export class HumanCursor {
 
   /** Fade the cursor out until show() (hideCursor step). */
   async hide() {
+    this.visible = false;
     await this.call('setVisible', false);
   }
 
   /** Fade the cursor back in (showCursor step). */
   async show() {
+    this.visible = true;
     await this.call('setVisible', true);
   }
 }

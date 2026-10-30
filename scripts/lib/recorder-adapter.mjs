@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { hideCursor, recordPage, showCursor } from 'testreel';
-import { HumanCursor, POINTER_ACTIONS, boxCenter, cursorSettings, zoomPage } from './human-cursor.mjs';
+import { HumanCursor, POINTER_ACTIONS, boxCenter, cursorSettings } from './human-cursor.mjs';
 import { watchTestreelFailures } from './testreel-failures.mjs';
 
 const RECORDING_FILES = new Set(['.webm', '.mp4', '.gif', '.png', '.json']);
@@ -122,14 +122,14 @@ async function executeStep(recorder, step, cursor) {
   const selector = step.selector ? resolveVars(step.selector) : null;
   if (cursor?.zoomOutPending) {
     cursor.zoomOutPending = false;
-    await zoomPage(page, null, 1);
+    await cursor.zoom(null, 1);
   }
   if (selector && [...POINTER_ACTIONS, 'zoom'].includes(step.action)) {
     await prepareSelector(page, selector, step);
   }
   // With the human cursor, the adapter zooms the page itself; testreel's zoom needs its own cursor events.
   const clickZoom = Boolean(cursor) && ['click', 'clickResponse'].includes(step.action) && step.zoom > 1;
-  if (clickZoom) await zoomPage(page, await boxCenter(locator(page, selector)), step.zoom);
+  if (clickZoom) await cursor.zoom(await boxCenter(locator(page, selector)), step.zoom);
   if (cursor && selector && POINTER_ACTIONS.includes(step.action)) await cursor.moveTo(locator(page, selector));
   const zoom = cursor ? undefined : step.zoom;
   let includesBuiltInPause = false;
@@ -143,7 +143,7 @@ async function executeStep(recorder, step, cursor) {
     case 'zoom':
       if (cursor) {
         const point = selector ? await boxCenter(locator(page, selector)) : step.x !== undefined ? { x: step.x, y: step.y } : null;
-        await zoomPage(page, point, step.scale ?? 2, step.duration ?? 600);
+        await cursor.zoom(point, step.scale ?? 2, step.duration ?? 600);
       } else {
         await recorder.zoom({ selector, scale: step.scale, x: step.x, y: step.y, duration: step.duration });
         includesBuiltInPause = true;
@@ -170,8 +170,12 @@ async function executeStep(recorder, step, cursor) {
     case 'uncheck':
       await recorder.hover(selector, { timeout: step.timeout });
       if (cursor) await cursor.ripple();
-      if (step.action === 'check') await locator(page, selector).check();
-      else await locator(page, selector).uncheck();
+      {
+        // Under pinch zoom Playwright's hit test misreads the zoomed view; the box and click are still exact.
+        const force = (cursor?.scale ?? 1) > 1.01;
+        if (step.action === 'check') await locator(page, selector).check({ force });
+        else await locator(page, selector).uncheck({ force });
+      }
       break;
     case 'clickResponse': {
       const responsePromise = page.waitForResponse(
@@ -266,7 +270,7 @@ export async function recordDefinition(definitionPath, options = {}) {
     if (!definition.setup && definition.cookies?.length) await context.addCookies(definition.cookies);
     const videoStartedAt = Date.now();
     const page = await context.newPage();
-    const cursor = cursorMode.human ? new HumanCursor(page, viewport, definition.steps) : null;
+    const cursor = cursorMode.human ? new HumanCursor(page, viewport, definition.steps, cursorMode.options) : null;
     if (!definition.setup && definition.localStorage && Object.keys(definition.localStorage).length) {
       await page.goto(resolveVars(definition.url), { waitUntil: 'commit', timeout: 20_000 });
       await page.evaluate((entries) => {
@@ -294,7 +298,7 @@ export async function recordDefinition(definitionPath, options = {}) {
       videoStartedAt,
     });
     for (const step of definition.steps ?? []) await executeStep(recorder, step, cursor);
-    if (cursor?.zoomOutPending) await zoomPage(page, null, 1);
+    if (cursor?.zoomOutPending) await cursor.zoom(null, 1);
     const watch = watchTestreelFailures();
     let result;
     try {

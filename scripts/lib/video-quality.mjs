@@ -82,6 +82,53 @@ export function findBlankSegments(videoPath, workDir, options = {}) {
   return segments.filter((segment) => segment.endMs - segment.startMs >= minimumMs);
 }
 
+const FLASH_FPS = 30;
+const FLASH_WIDTH = 96;
+const FLASH_HEIGHT = 54;
+
+function meanDifference(left, right) {
+  let total = 0;
+  for (let index = 0; index < left.length; index++) total += Math.abs(left[index] - right[index]);
+  return total / left.length;
+}
+
+function isFlash(levels, index) {
+  const before = levels.slice(Math.max(0, index - 3), index);
+  const after = levels.slice(index + 1, index + 4);
+  if (!before.length || !after.length) return false;
+  const level = levels[index];
+  const [highBefore, highAfter] = [Math.max(...before), Math.max(...after)];
+  const [lowBefore, lowAfter] = [Math.min(...before), Math.min(...after)];
+  const dark = level < 0.7 * highBefore && level < 0.7 * highAfter && Math.min(highBefore, highAfter) - level > 6;
+  const bright = level > 1.4 * lowBefore && level > 1.4 * lowAfter && level - Math.max(lowBefore, lowAfter) > 6;
+  return dark || bright;
+}
+
+/**
+ * Find capture glitches on a 30 fps grid. `flashes` are frames much darker or brighter than the frames on both
+ * sides (a repaint caught mid-draw); `glitches` are frames that jump away from the picture and return within
+ * twelve frames (a flicker, or a popup that opens and closes too fast to read).
+ */
+export function findFlashFrames(videoPath) {
+  const raw = execFileSync(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-an', '-vf',
+    `fps=${FLASH_FPS},scale=${FLASH_WIDTH}:${FLASH_HEIGHT},format=gray`, '-f', 'rawvideo', '-'],
+  { maxBuffer: 2 ** 31 - 1 });
+  const size = FLASH_WIDTH * FLASH_HEIGHT;
+  const frames = Array.from({ length: Math.floor(raw.length / size) }, (_, index) => raw.subarray(index * size, (index + 1) * size));
+  const levels = frames.map((frame) => frame.reduce((total, value) => total + value, 0) / size);
+  const flashes = [];
+  const glitches = [];
+  let good = frames[0];
+  for (let index = 1; index < frames.length; index++) {
+    if (isFlash(levels, index)) flashes.push(Math.round((index / FLASH_FPS) * 1000));
+    const jumped = meanDifference(frames[index], good) > 5;
+    const returns = jumped && frames.slice(index + 1, index + 13).some((later) => meanDifference(later, good) <= 2.5);
+    if (returns) glitches.push(Math.round((index / FLASH_FPS) * 1000));
+    else good = frames[index];
+  }
+  return { flashes, glitches };
+}
+
 export function formatTimestamp(ms) {
   const totalSeconds = ms / 1000;
   const minutes = Math.floor(totalSeconds / 60);

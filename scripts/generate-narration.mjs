@@ -14,10 +14,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { demoVideoHome, projectCacheDir } from './lib/npm-env.mjs';
-import { disposeSynthesizer } from './lib/synthesize.mjs';
+import { disposeSynthesizer, voiceLabel } from './lib/synthesize.mjs';
 import { cachedNarration } from './lib/narration-cache.mjs';
 import { prepareNarration } from './lib/narration-text.mjs';
 import { selectVoice } from './lib/voice-selection.mjs';
+import { HUMAN_REACH_EXTRA_MS, POINTER_ACTIONS, cursorSettings } from './lib/human-cursor.mjs';
 
 const DEFAULT_PAUSE_AFTER = 500; // testreel's own documented default for non-wait steps
 
@@ -33,13 +34,19 @@ const name = path.basename(inputPath).replace(/\.recording\.json$/, '');
 const projectCache = projectCacheDir(demoVideoHome());
 const cacheDir = path.join(projectCache, name);
 const audioDir = path.join(cacheDir, 'audio');
+const manifestPath = path.join(cacheDir, 'narration-manifest.json');
 fs.mkdirSync(audioDir, { recursive: true });
+// Clips are rewritten in place, so a run that fails midway must not leave the previous manifest pointing at them.
+fs.rmSync(manifestPath, { force: true });
 
 const def = JSON.parse(fs.readFileSync(inputPath, 'utf-8'));
 const definitionHash = crypto.createHash('sha256').update(fs.readFileSync(inputPath)).digest('hex');
 function validateBranches(steps, nested = false) {
   for (const step of steps) {
-    if (nested && step.narration) throw new Error('Place narration on top-level steps; branch narration is not supported.');
+    if (nested && (step.narration || step.spokenNarration)) {
+      throw new Error('Place narration on top-level steps; branch narration is not supported.');
+    }
+    if (step.spokenNarration && !step.narration) throw new Error('spokenNarration needs the step\'s narration caption.');
     validateBranches(step.then ?? [], true);
     validateBranches(step.else ?? [], true);
   }
@@ -83,6 +90,13 @@ const actionOverheadMs = narrationCfg.actionOverheadMs ?? 400;
 const initialSilenceMs = Math.max(0, narrationCfg.initialSilenceMs ?? 0);
 const finalSilenceMs = Math.max(0, narrationCfg.finalSilenceMs ?? 0);
 const globalSpeed = def.speed ?? 1;
+const desktop = def.capture?.type === 'desktop';
+const desktopHuman = desktop && (def.capture?.motion ?? 'human') === 'human';
+// A human desktop click reaches, settles, and presses (about 0.8 s) where a linear click is immediate.
+const DESKTOP_REACH_EXTRA_MS = 400;
+const reachActions = desktop ? ['move', 'click', 'doubleClick', 'drag', 'imageClick'] : [...POINTER_ACTIONS, 'upload'];
+const humanReachMs = desktop ? (desktopHuman ? DESKTOP_REACH_EXTRA_MS : 0)
+  : cursorSettings(def).human ? HUMAN_REACH_EXTRA_MS : 0;
 
 // Rough estimate of how long a non-`wait` step's own animation takes, used
 // only to decide how much *silent* lead-in to give a narration clip before it
@@ -91,10 +105,20 @@ const globalSpeed = def.speed ?? 1;
 // It never truncates audio, because the pause itself is sized from the measured
 // measured clip duration, not off this estimate.
 function estimateActionMs(step) {
+  const reach = reachActions.includes(step.action) ? humanReachMs / globalSpeed : 0;
+  return reach + stepActionMs(step);
+}
+
+function stepActionMs(step) {
   switch (step.action) {
     case 'wait':
       return step.ms ?? 1000;
     case 'type':
+      if (desktop) {
+        // Desktop typing uses `interval` in seconds; the human rhythm adds pauses after words and punctuation.
+        const interval = step.interval ?? (desktopHuman ? 0.09 : 0.04);
+        return (step.text?.length || 0) * interval * 1000 * (desktopHuman ? 1.15 : 1);
+      }
       return ((step.text?.length || 0) * (step.delay ?? 80)) / globalSpeed;
     case 'scroll':
       return 600 / globalSpeed;
@@ -129,7 +153,8 @@ for (const step of def.steps) {
   const entry = { action: step.action, narrated: false, leadSilenceMs: 0, trailSilenceMs: 0 };
 
   if (step.narration) {
-    const prepared = prepareNarration(step.narration, narrationCfg, path.dirname(path.resolve(inputPath)));
+    const prepared = prepareNarration(step.narration, narrationCfg, path.dirname(path.resolve(inputPath)),
+      step.spokenNarration);
     for (const warning of prepared.warnings) {
       console.warn(`[${name}] narration step ${clipIndex}: ${warning}`);
     }
@@ -139,6 +164,7 @@ for (const step of def.steps) {
     const durationMs = audio.durationMs;
     if (audio.cached) reusedClips++;
     entry.engine = audio.engine;
+    entry.voice = voiceLabel(audio.engine, narrationCfg);
     const requiredMs = durationMs + bufferMs;
 
     if (step.action === 'wait') {
@@ -171,8 +197,13 @@ if (finalSilenceMs > 0) {
 
 await disposeSynthesizer();
 
+const voices = [...new Set(manifest.filter((entry) => entry.narrated).map((entry) => `${entry.engine}/${entry.voice}`))];
+if (voices.length > 1) {
+  throw new Error(`Narration mixes voices (${voices.join(', ')}) because a fallback ran for only some clips. ` +
+    'Repair the primary engine and run again, or set engine to the fallback so every clip uses one voice.');
+}
+
 const resolvedPath = path.join(cacheDir, 'recording.resolved.json');
-const manifestPath = path.join(cacheDir, 'narration-manifest.json');
 fs.writeFileSync(resolvedPath, JSON.stringify(def, null, 2));
 fs.writeFileSync(manifestPath, JSON.stringify({ name, definitionHash, manifest }, null, 2));
 

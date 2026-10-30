@@ -35,6 +35,8 @@ ASS captions use white bold text with an opaque black box. Font size defaults to
 }
 ```
 
+Speed applies to the whole timeline, narration included. Prefer `speed: 1` and shorten silent waits with `compact-silence.mjs`, which speeds up only the gaps between captions and only by whole numbers. A fractional video speed drops frames unevenly, which shows as stutter in cursor and scroll motion.
+
 All cut times are seconds in the supplied source, before speed adjustment. Do not mix times from earlier versions. Overlapping removal intervals are merged. Retained video, audio, and subtitles use the same time map. Audio speed changes preserve pitch. Supported delivery speeds range from 0.5x to 2x.
 
 A cut intersecting a caption fails by default. Prefer measured silent boundaries. `allowCutSpeech: true` permits deliberate removal but does not rewrite the words in a partially cut caption; edit or regenerate those captions before delivery. Without an SRT, the script cannot protect spoken content automatically. Confirm silent boundaries by listening or using a silence detector before cutting.
@@ -55,8 +57,8 @@ Timing edits use H.264 CRF 18 and AAC 192 kbps. Burning captions uses the clean 
 
 ## Narration controls
 
-Piper uses `en_US-ryan-medium` by default. `narrationConfig.speed` now changes Piper phoneme duration. Values above 1 speak faster; leave it at 1 unless a different rate is wanted. Clip durations are measured after synthesis.
+Kokoro uses `am_michael` with the full-precision model by default; Piper (`en_US-ryan-medium`) is the second engine. `narrationConfig.speed` changes the speaking rate for every engine. Values above 1 speak faster; leave it at 1 unless a different rate is wanted. Clip durations are measured after synthesis.
 
-Piper failures stop by default to keep voice choice consistent. `fallbackEngine: "tiny-tts"` explicitly permits emergency fallback; `null` keeps Piper required. Fallback clips are recorded with their engine in the manifest and are not cached as Piper clips. `cacheNarration: false` forces fresh synthesis when replacing a model file or investigating sound quality.
+Engine failures stop by default to keep voice choice consistent. `fallbackEngine: "piper"` or `"tiny-tts"` explicitly permits a fallback; `null` keeps the configured engine required. Fallback clips are recorded with their engine and voice in the manifest and are not cached as primary-engine clips, and narration within one definition that mixes voices stops the render. `cacheNarration: false` forces fresh synthesis when replacing a model file or investigating sound quality.
 
-Unchanged speech clips are reused across recording parts in the same project. The cache key includes spoken text, engine, voice, speaker, speed, and explicit model identity. Updated narration invalidates the compile manifest, preventing the final video from using stale audio by accident.
+Unchanged speech clips are reused across recording parts in the same project. The cache key includes spoken text, engine, voice, language, speaker, speed, and model identity (the pinned digest for Kokoro downloads). Updated narration invalidates the compile manifest, preventing the final video from using stale audio by accident. After replacing narration, run `verify-narration.mjs` with `--video` and `--srt` on the delivered master to confirm the soundtrack says the script in order and each caption starts where its words are heard.

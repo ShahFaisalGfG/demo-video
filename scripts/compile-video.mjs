@@ -25,6 +25,8 @@ import { demoVideoHome, projectCacheDir, browsersDir } from './lib/npm-env.mjs';
 import { detectLeadingLoadingMs, findBlankSegments, formatTimestamp } from './lib/video-quality.mjs';
 import { selectEncoder } from './lib/encoder.mjs';
 import { masterAudio } from './lib/audio-mastering.mjs';
+import { ensureDeglitchEnv } from './lib/desktop-venv.mjs';
+import { watchTestreelFailures } from './lib/testreel-failures.mjs';
 
 const ffprobePath = ffprobeStatic.path;
 
@@ -79,7 +81,7 @@ function visualDefinition(value) {
   if (!value || typeof value !== 'object') return value;
   const output = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === 'narration' || key === 'narrationConfig') continue;
+    if (key === 'narration' || key === 'spokenNarration' || key === 'narrationConfig') continue;
     output[key] = visualDefinition(child);
   }
   return output;
@@ -117,6 +119,20 @@ function leadingNarrationSilenceMs(entries) {
     total += (entry.durationMs ?? 0) + (entry.trailSilenceMs ?? 0);
   }
   return total;
+}
+
+/** Replace repaint flashes and returning jumps in a capture (opt-in quality.deglitch). */
+function removeCaptureGlitches(source) {
+  const info = JSON.parse(execFileSync(ffprobePath, ['-v', 'error', '-select_streams', 'v:0', '-show_entries',
+    'stream=width,height,r_frame_rate', '-of', 'json', source], { encoding: 'utf8' })).streams[0];
+  const output = path.join(cacheDir, 'video', `${name}-deglitched.mp4`);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  const python = ensureDeglitchEnv();
+  const stats = JSON.parse(execFileSync(python, ['-I', path.join(path.dirname(fileURLToPath(import.meta.url)),
+    'deglitch-video.py'), ffmpegPath, source, output, String(info.width), String(info.height), info.r_frame_rate],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim().split('\n').at(-1));
+  console.log(`[${name}] replaced ${stats.replaced} glitch frame(s) of ${stats.frames}.`);
+  return output;
 }
 
 function resolveVars(value) {
@@ -157,6 +173,8 @@ process.stdout.write = (chunk, ...args) => {
   if (ready) readinessFailures.push({ selector: ready[1], message: ready[2].split('\n')[0] });
   return stdoutWrite(chunk, ...args);
 };
+// The owned adapter refuses a failed testreel pass itself; this watch also covers the legacy recorder.
+const testreelWatch = watchTestreelFailures();
 
 console.log(reuseVideoPath
   ? `[${name}] reusing previously verified silent video ${reuseVideoPath}`
@@ -182,6 +200,7 @@ try {
   }
 } catch (err) {
   process.stdout.write = stdoutWrite;
+  testreelWatch.stop();
   // The recorder aborts on the first step that throws. There is no
   // partial output and no per-step recovery hook exposed by its RecordOptions API. The
   // most common cause is a "waitForNetwork" step whose matching response already
@@ -202,7 +221,13 @@ try {
   process.exit(1);
 }
 process.stdout.write = stdoutWrite;
+const postProcessingFailures = testreelWatch.stop();
 console.log(`[${name}] ${reuseVideoPath || automaticReusePath ? 'using' : 'recorded'} ${videoPath}`);
+if (postProcessingFailures.length) {
+  for (const failure of postProcessingFailures) console.error(`[${name}] ✘ recorder ${failure}`);
+  console.error(`[${name}] Refusing to mux a capture without its cursor, frame, or speed treatment.`);
+  process.exit(1);
+}
 if (readinessFailures.length) {
   for (const failure of readinessFailures) {
     console.error(`[${name}] ✘ initial ready selector '${failure.selector}' failed: ${failure.message}`);
@@ -216,6 +241,9 @@ if (stepFailures.length) {
   console.warn(`[${name}] Fix the legacy recording definition and run it again. Prefer the owned adapter for strict action failures.`);
   console.error(`[${name}] Refusing to mux a recording with skipped actions.`);
   process.exit(1);
+}
+if (desktopCapture && resolvedDef.quality?.deglitch === true && !automaticReusePath) {
+  videoPath = removeCaptureGlitches(videoPath);
 }
 
 // 2. Rebuild the narration track from the manifest.

@@ -14,7 +14,7 @@
 
 ---
 
-Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that turns a website or desktop workflow into a polished MP4. Your coding agent writes a recording definition, records the flow through Playwright or native screen capture, narrates it with a local Piper voice, adds synchronized captions, and checks the encoded video for the evidence the narration promises. Everything runs on your machine, in an isolated runtime that never touches the project being demonstrated.
+Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that turns a website or desktop workflow into a polished MP4. Your coding agent writes a recording definition, records the flow through Playwright or native screen capture with a cursor that moves like a hand, narrates it with a local Kokoro voice, checks that narration with speech recognition, adds synchronized captions, and checks the encoded video for the evidence the narration promises. Everything runs on your machine, in an isolated runtime that never touches the project being demonstrated.
 
 > *Show it. Say it. Prove it.*
 
@@ -39,7 +39,8 @@ Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that tur
   - [Versioning \& Releases](#versioning--releases)
   - [Contributing](#contributing)
   - [Changelog](#changelog)
-    - [v1.5.0 - October 2026 *(current)*](#v150---october-2026-current)
+    - [v1.6.0 - October 2026 *(current)*](#v160---october-2026-current)
+    - [v1.5.0 - October 2026](#v150---october-2026)
   - [License \& Credits](#license--credits)
   - [Support the Project](#support-the-project)
 
@@ -59,7 +60,9 @@ Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that tur
 Screen recordings drift out of date, and redoing one by hand means recording, narrating, captioning, and editing all over again. Demo Video makes the demo a file your agent can rerun.
 
 - 🎬 **Recorded from a definition** - verified selectors and actions, so the next release is one command away
-- 🗣️ **Local narration** - Piper voices run offline, cached per sentence, with pronunciation rules for product names
+- 🗣️ **Local narration** - natural Kokoro voices (Piper as the second engine) run offline, cached per sentence, with pronunciation rules for product names
+- 🖱️ **Human cursor** - curved, eased reaches timed like a hand, in browser and desktop recordings
+- 👂 **Heard, not assumed** - speech recognition checks every narration line and the finished soundtrack against the script
 - 💬 **Captions that match the speech** - phrase-level cues aligned to detected speech, in ASS and SRT
 - ✅ **Proof, not hope** - DOM, OCR, and image checks confirm the encoded frames show what the narration says
 - 🧪 **Isolated runtime** - browsers, models, and Python environments live under `~/.demo_video`, never in your project
@@ -71,12 +74,14 @@ Screen recordings drift out of date, and redoing one by hand means recording, na
 - **Website recording** through Playwright with verified DOM selectors and state-aware actions: `check`, `uncheck`, `clickResponse`, `assert`, `if`, and `upload`
 - **Native desktop recording** on Windows, Linux X11, and macOS, with coordinate, ratio, and image-based actions
 - **Presentation stage** - a dark stage with window chrome, a large cursor, click ripples, controlled scrolls, and focus zooms, rendered at 2560x1440 for client demos
-- **Piper narration** with automatic voice selection, pronunciation dictionaries, audio mastering, and a cache that reuses unchanged clips
+- **Human cursor motion** - curved arcs, minimum-jerk speed, Fitts-law timing, and a small overshoot on long reaches; drawn in the page for browser recordings (no move limit) and driven through the system pointer for desktop recordings, with human typing rhythm and a foreground-window guard
+- **Kokoro narration** with the full-precision model and the `am_michael` voice by default, Piper as the second engine, automatic voice selection, tested pronunciation rules, per-step spoken overrides, audio mastering, and a cache that reuses unchanged clips
+- **Narration verification** - faster-whisper transcribes every clip and the final soundtrack, compares the words with the captions, measures caption offsets, and lists heteronyms with their phonemes
 - **Captions** generated from measured narration timing and aligned to speech with faster-whisper
 - **Paired delivery** - clean MP4, captioned MP4, ASS, and SRT from one timeline that stays synchronized after cuts and speed changes
 - **Fast revisions** - replace audio without re-recording, cut intervals, change speed, and patch a short section of a long H.264 video without a full re-encode
 - **Evidence gates** - DOM evidence, OCR and reference-image checks on final frames, and optional semantic checks through a local Qwen3-VL endpoint
-- **Quality checks** - blank and loading frame detection, pacing analysis, lossless merging of split recordings, and stream checks on the final MP4
+- **Quality checks** - blank and loading frame detection, single-frame flash detection, an optional deglitch pass for desktop captures, pacing analysis, whole-number silence compaction, lossless merging of split recordings, and stream checks on the final MP4
 - **Hardware encoding** with NVENC, Quick Sync, AMF, VAAPI, or VideoToolbox when it preserves detail, and `libx264` otherwise
 
 ---
@@ -111,9 +116,9 @@ The skill follows the Agent Skills `SKILL.md` format:
 ### Requirements
 
 - Node.js 20 or newer
-- Python 3.10 or newer for Piper, subtitle alignment, OCR, or desktop automation
+- Python 3.10 or newer for Kokoro, Piper, subtitle alignment, narration verification, OCR, or desktop automation
 - Internet access for the first model and browser download
-- At least 2 GB of free cache space; more when using local VLMs
+- At least 4 GB of free cache space for models and caches; more when using local VLMs
 
 ---
 
@@ -130,7 +135,7 @@ The skill follows the Agent Skills `SKILL.md` format:
 
 2. Ask your agent for a video. For example, in Codex:
 
-   > Use $demo-video to create a clear tutorial of the sign-up flow at http://localhost:3000, with Piper narration, focused interactions, and captioned and clean versions.
+   > Use $demo-video to create a clear tutorial of the sign-up flow at http://localhost:3000, with Kokoro narration, focused interactions, and captioned and clean versions.
 
    In Claude Code, describe the video you want or run `/demo-video`.
 
@@ -169,8 +174,9 @@ macOS native capture requires Screen Recording permission. Native automation req
 
 ## Local Models
 
-- Piper is the primary narration engine. The default `en_US-ryan-medium` voice downloads once and remains cached. Piper failures stop the render; TinyTTS runs only when `fallbackEngine: "tiny-tts"` is set.
-- faster-whisper aligns captions to speech and can score voice pronunciation.
+- Kokoro v1.0 is the primary narration engine. Its full-precision model and voices (354 MB) download once, are checked against pinned SHA-256 digests, and remain cached; `kokoroPrecision` selects the smaller `fp16` or `int8` model.
+- Piper is the second engine (`engine: "piper"`, default voice `en_US-ryan-medium`). Engine failures stop the render; another engine runs only when `fallbackEngine` names it.
+- faster-whisper aligns captions to speech, scores voice pronunciation, and verifies narration (`large-v3-turbo` by default for verification).
 - Qwen3-VL semantic evidence works through an OpenAI-compatible local endpoint. Set `DEMO_VLM_BASE_URL` and optionally `DEMO_VLM_MODEL`.
 
 No remote semantic endpoint is contacted unless `quality.semanticEvidence` is configured.
@@ -201,7 +207,9 @@ node ~/.demo_video/scripts/release-test.mjs
 python scripts/desktop-runner.py tests/desktop-smoke.recording.json --validate
 ```
 
-`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery and narration revisions.
+Add `--with-kokoro` or `--with-piper` to the release test to run its narration checks with that engine instead of TinyTTS.
+
+`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder with the human cursor, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery, whole-number silence compaction, flash detection, desktop path planning, engine fallback rules, and narration revisions.
 
 [CI](.github/workflows/ci.yml) runs these checks on Windows, Linux, and macOS for every push and pull request, plus the OCR evidence test on Windows.
 
@@ -253,7 +261,15 @@ Keep credentials, client recordings, and generated media out of commits. For sig
 
 ## Changelog
 
-### v1.5.0 - October 2026 *(current)*
+### v1.6.0 - October 2026 *(current)*
+- 🗣️ **Kokoro narration by default** with the full-precision model and the `am_michael` voice; Piper is the second engine
+- 🖱️ **Human cursor motion** in browser and desktop recordings, with no cursor move limit in the browser
+- 👂 **Narration verification** with speech recognition, caption offsets, and heteronym phonemes
+- 🔤 **Tested pronunciation rules** - plain capitals, hyphenated letters, audible plurals, and per-step `spokenNarration`
+- 🎞️ **Flash detection** in final QA, an optional desktop deglitch pass, and whole-number silence compaction
+- 🛡️ **Safer captures** - a foreground-window guard for desktop input, and refusal of recordings whose post-processing failed
+
+### v1.5.0 - October 2026
 - 🎓 **Tutorial direction** for demos, how-to guides, and training videos
 - 🎞️ **Paired delivery:** clean and captioned MP4s with synchronized ASS and SRT captions from one timeline
 - ✂️ **Fast revisions:** replace audio without re-recording, cut intervals, and change speed
@@ -269,7 +285,7 @@ Keep credentials, client recordings, and generated media out of commits. For sig
 
 Released under the [MIT License](LICENSE) - free to use, modify, and distribute. The skill downloads or invokes third-party tools and models, each under its own license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). A tool's license and the license of the media it generates are separate questions, so review the model card of every voice and model before client delivery.
 
-Built with Playwright, testreel, FFmpeg, Piper, faster-whisper, RapidOCR, and PyAutoGUI.
+Built with Playwright, testreel, FFmpeg, Kokoro, Piper, faster-whisper, RapidOCR, and PyAutoGUI.
 
 Built with ❤️ by **Shah Faisal** · [Portfolio](https://shahfaisalgfg.github.io/) · [shahfaisalgfg@gmail.com](mailto:shahfaisalgfg@gmail.com)
 

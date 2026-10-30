@@ -1,31 +1,17 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { demoVideoHome } from './npm-env.mjs';
+import { ensureVenv } from './python-venv.mjs';
 
-function systemPython() {
-  for (const candidate of ['python3', 'python']) {
-    try {
-      execFileSync(candidate, ['--version'], { stdio: 'ignore' });
-      return candidate;
-    } catch {
-      // Try the next platform convention.
-    }
-  }
-  throw new Error('Python 3 is required for native desktop automation.');
+const VENV_DIR = path.join(demoVideoHome(), '.demovideo_desktop_venv');
+const PACKAGES = ['PyAutoGUI>=0.9.54,<1', 'Pillow>=10,<12', 'opencv-python-headless>=4.9,<5'];
+
+/** Interpreter for native desktop input; importing PyAutoGUI needs a display on Linux. */
+export function ensureDesktopEnv() {
+  return ensureVenv(VENV_DIR, { imports: ['pyautogui', 'PIL', 'cv2', 'numpy'], packages: PACKAGES,
+    purpose: 'native desktop automation' });
 }
 
-export function ensureDesktopEnv() {
-  const root = path.join(demoVideoHome(), '.demovideo_desktop_venv');
-  const python = process.platform === 'win32'
-    ? path.join(root, 'Scripts', 'python.exe')
-    : path.join(root, 'bin', 'python');
-  if (!fs.existsSync(python)) execFileSync(systemPython(), ['-m', 'venv', root], { stdio: 'inherit' });
-  try {
-    execFileSync(python, ['-c', 'import pyautogui, PIL'], { stdio: 'ignore', timeout: 15_000 });
-  } catch {
-    execFileSync(python, ['-m', 'pip', 'install', '--disable-pip-version-check',
-      'PyAutoGUI>=0.9.54,<1', 'Pillow>=10,<12', 'opencv-python-headless>=4.9,<5'], { stdio: 'inherit' });
-  }
-  return python;
+/** Interpreter for the deglitch filter, which needs only NumPy and so also runs on hosts without a display. */
+export function ensureDeglitchEnv() {
+  return ensureVenv(VENV_DIR, { imports: ['numpy'], packages: PACKAGES, purpose: 'capture deglitching' });
 }

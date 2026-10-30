@@ -10,6 +10,7 @@ import { parseSrt, formatSrt, formatAss } from './lib/captions.mjs';
 import { editTimeline, retimeCues } from './lib/edit-timeline.mjs';
 import { cachedNarration } from './lib/narration-cache.mjs';
 import { synthesize, disposeSynthesizer } from './lib/synthesize.mjs';
+import { systemPython } from './lib/python-venv.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-release-test-'));
 const scripts = path.dirname(fileURLToPath(import.meta.url));
@@ -82,7 +83,35 @@ try {
   runScript('deliver-video.mjs', spec);
   assert.ok(Math.abs(duration(path.join(root, 'silent-edited.mp4')) - 6.4) < 0.15);
 
-  const config = { engine: process.argv.includes('--with-piper') ? 'piper' : 'tiny-tts', speed: 1 };
+  const captions = path.join(root, 'captions.srt');
+  runScript('compact-silence.mjs', source, captions, path.join(root, 'compact.mp4'), path.join(root, 'compact.srt'),
+    '--silence-speed', '3', '--minimum-gap-ms', '500', '--encoder', 'libx264');
+  assert.ok(Math.abs(duration(path.join(root, 'compact.mp4')) - 4.8) < 0.15);
+  assert.equal(parseSrt(fs.readFileSync(path.join(root, 'compact.srt'), 'utf8'))[1].start, 2.4);
+  assert.throws(() => runScript('compact-silence.mjs', source, captions, path.join(root, 'fractional.mp4'),
+    path.join(root, 'fractional.srt'), '--silence-speed', '2.5'), /whole number/);
+
+  const flashed = path.join(root, 'flashed.mp4');
+  execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=0xE8E8F0:s=320x180:r=30:d=4', '-f', 'lavfi',
+    '-i', 'sine=frequency=300:sample_rate=48000:d=4', '-vf', "drawbox=w=iw:h=ih:c=black:t=fill:enable='eq(n,45)'",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', flashed]);
+  assert.throws(() => runScript('verify-video.mjs', flashed), /single-frame flashes: 00:01.50/);
+  assert.match(runScript('verify-video.mjs', source), /flash QA passed/);
+
+  const runner = path.join(scripts, 'desktop-runner.py');
+  execFileSync(systemPython('the desktop path check'), ['-I', '-c', [
+    'import importlib.util, random, sys',
+    `spec = importlib.util.spec_from_file_location("runner", ${JSON.stringify(runner)})`,
+    'runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)',
+    'total, points = runner.human_path((100, 100), (1000, 600), random.Random(7))',
+    'again = runner.human_path((100, 100), (1000, 600), random.Random(7))',
+    'off = max(abs((x - 100) * 500 - (y - 100) * 900) for x, y in points) / (900 ** 2 + 500 ** 2) ** 0.5',
+    'ok = (total, points) == again and points[-1] == (1000, 600) and 0.26 <= total <= 1.1 and off > 1',
+    'sys.exit(0 if ok and runner.move_duration(60) < total else 1)',
+  ].join('\n')], { stdio: 'inherit' });
+
+  const engine = ['kokoro', 'piper'].find((name) => process.argv.includes(`--with-${name}`)) ?? 'tiny-tts';
+  const config = { engine, speed: 1 };
   const clip = path.join(root, 'speech.wav');
   const text = 'Open the workspace and choose a contact to review the result.';
   const cache = path.join(root, 'clips');
@@ -96,8 +125,14 @@ try {
   assert.ok(faster.durationMs < first.durationMs * 0.9);
   await assert.rejects(synthesize('Invalid speed', clip, { speed: 0 }));
   await assert.rejects(synthesize('Invalid engine', clip, { engine: 'unsupported' }));
-  if (process.argv.includes('--with-piper')) {
-    await assert.rejects(synthesize('Unavailable model', clip, { piperModel: path.join(root, 'missing.onnx') }), /Piper narration failed/);
+  await assert.rejects(synthesize('Same fallback', clip, { engine: 'piper', fallbackEngine: 'piper' }), /fallbackEngine/);
+  await assert.rejects(synthesize('Unknown fallback', clip, { fallbackEngine: 'espeak' }), /fallbackEngine/);
+  if (engine === 'piper') {
+    await assert.rejects(synthesize('Unavailable model', clip, { engine, piperModel: path.join(root, 'missing.onnx') }),
+      /piper narration failed/);
+  }
+  if (engine === 'kokoro') {
+    await assert.rejects(synthesize('Unknown voice', clip, { engine, kokoroVoice: 'zz_nobody' }), /kokoro narration failed/);
   }
   await disposeSynthesizer();
 
@@ -115,7 +150,12 @@ try {
   settings.steps = [{ action: 'if', then: [{ action: 'wait', narration: 'A hidden branch.' }] }];
   fs.writeFileSync(definition, JSON.stringify(settings));
   assert.throws(() => runScript('generate-narration.mjs', definition), /branch narration/);
-  console.log('[release-test] passed: paired delivery, ASS, cuts, speed, stream copy, audio replacement, narration cache, offline reuse, and stale audio rejection.');
+  settings.steps = [{ action: 'wait', ms: 500, spokenNarration: 'Speech without a caption.' }];
+  fs.writeFileSync(definition, JSON.stringify(settings));
+  assert.throws(() => runScript('generate-narration.mjs', definition), /spokenNarration needs/);
+  console.log(`[release-test] passed with ${engine}: paired delivery, ASS, cuts, speed, stream copy, audio replacement, `
+    + 'whole-number silence compaction, flash detection, desktop paths, narration cache, engine fallback rules, '
+    + 'offline reuse, spoken narration rules, and stale audio rejection.');
 } finally {
   await disposeSynthesizer();
   if (process.argv.includes('--keep-artifacts')) console.log(`[release-test] artifacts: ${root}`);

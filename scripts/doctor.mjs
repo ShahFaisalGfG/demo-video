@@ -4,6 +4,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { browsersDir, demoVideoHome } from './lib/npm-env.mjs';
+import { kokoroModelsPresent, kokoroVenvDir } from './lib/kokoro-env.mjs';
+import { venvBin, venvReady } from './lib/python-venv.mjs';
 
 function command(name, args = ['--version']) {
   try {
@@ -27,6 +29,13 @@ const browserReady = fs.existsSync(browserRoot) && fs.readdirSync(browserRoot).s
 add('Chromium', browserReady, 'web', browserReady ? browserRoot : 'run scripts/bootstrap.mjs');
 const python = command('python3') ?? command('python');
 add('Python', Boolean(python), 'narration-desktop', python ?? 'Python 3 is unavailable');
+const kokoroReady = venvReady(kokoroVenvDir(), ['kokoro_onnx', 'soundfile']) && kokoroModelsPresent();
+add('Kokoro narration (default engine)', kokoroReady, 'narration', kokoroReady
+  ? 'am_michael voice, full-precision model'
+  : 'installs on the first narration: an isolated Python environment and a one-time 354 MB model download');
+const piperReady = fs.existsSync(venvBin(path.join(demoVideoHome(), '.demovideo_venv'), 'piper'));
+add('Piper narration (second engine)', piperReady, 'narration', piperReady
+  ? 'installed' : 'installs when engine or fallbackEngine is "piper"');
 
 let devices = '';
 if (ffmpegPath && fs.existsSync(ffmpegPath)) {
@@ -46,7 +55,7 @@ if (process.platform === 'linux') {
 try {
   const disk = fs.statfsSync(demoVideoHome());
   const availableGb = disk.bavail * disk.bsize / 1024 ** 3;
-  add('Free cache space', availableGb >= 2, 'recommended', `${availableGb.toFixed(1)} GB available`);
+  add('Free cache space', availableGb >= 4, 'recommended', `${availableGb.toFixed(1)} GB available`);
 } catch {
   add('Free cache space', true, 'recommended', 'not measured');
 }

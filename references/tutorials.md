@@ -11,13 +11,15 @@ Use this reference when creating a new how-to, onboarding guide, product demonst
 | Training guide | Prerequisites, chapters, complete workflows, recovery tips | Separate clips per chapter; explain decisions where they occur |
 | Narration or caption revision | Existing master plus requested replacement | Reuse capture; change only the required media tracks or intervals |
 
-Do not force a complete instructional workflow into a short promotional duration. Estimate speech at roughly 130 to 155 words per minute plus necessary visual holds, then use measured Piper audio to establish timing. The estimate is planning guidance, not a fixed playback rate.
+Do not force a complete instructional workflow into a short promotional duration. Estimate speech at roughly 130 to 155 words per minute plus necessary visual holds, then use measured narration audio to establish timing. The estimate is planning guidance, not a fixed playback rate.
 
 ## Storyboard before recording
 
 Use a compact table in the working notes with columns for: scene, viewer goal, visible action, expected result, narration, focus area, and whether the action changes application data. Assign each scene a stable name and its own recording part where practical.
 
 Start with the viewer's desired outcome and any required workspace or account switch. Keep login credentials outside the capture. Show the route into the feature, then the full action and its result. End with the next useful action or an invitation to try the workflow. Avoid repeated introductions, unnecessary menu tours, and an empty closing screen.
+
+Write narration as one continuous, conversational voice-over: each line says what the next action does as it begins and leads into the following step. Avoid short caption-style lines separated by silence; a voice that waits, then speaks a few words without context, sounds unnatural. Fill a long wait with a sentence about what is happening rather than leaving it silent.
 
 For a named presenter, write in their voice: "I'll show you how to..." and "You can now...". For an unnamed tutorial, address the viewer as "you". Do not narrate the agent's work, describe the viewer in the third person, or insert unverified claims about automatic behavior.
 
@@ -35,13 +37,17 @@ Supporting diagrams may explain a relationship that cannot be seen in one screen
 
 ## Capture once, revise efficiently
 
+For a native desktop take, the screen and input belong to the recording until it ends. Ask the user to enable Do Not Disturb, close chat and mail apps, and keep hands off the mouse and keyboard; set `capture.windowTitle` so input stops if anything else takes the foreground. A notification inside the frame means recording the take again.
+
 Keep recordings short enough that variable page loading cannot accumulate large timing drift. A roughly 15 to 30 second scene is a useful starting point, not a limit. Put slow operations between clips and show their completed result with a truthful transition such as "Once processing finishes...".
 
 The structural verifier executes actions. A dry run can create the same record that a later recording tries to create. Inspect existing state before rerunning forms; reuse the captured result or use an authorized reversible record. Do not repeat external sends, payments, activation, or destructive actions to improve footage. Existing authorization persists, but recording tools do not broaden it.
 
 For spoken actions, prefer an explanatory `wait`, the visible interaction, a result assertion, and a short narrated result hold. This gives the viewer context before the click and makes timing easier to control. Avoid narrated steps nested inside `if`; the narrator cannot know the chosen branch before capture. Split the flow into deterministic scenes instead.
 
-Listen to one representative Piper sentence before a long synthesis run, using any user-provided product names. Keep the same voice across all parts. Voice scoring estimates intelligibility and acoustic properties; it does not decide the viewer's preferred tone. Use Ryan unless the user requests another voice. If Piper fails, repair it before choosing another engine.
+Listen to one representative Kokoro sentence before a long synthesis run, using any user-provided product names. Keep the same voice across all parts. Voice scoring estimates intelligibility and acoustic properties; it does not decide the viewer's preferred tone. Use Kokoro `am_michael` unless the user requests another voice; Piper `en_US-ryan-medium` is the second choice. If an engine fails, repair it before choosing another one.
+
+Run `verify-narration.mjs` after synthesis and again on the final video. It catches what reading the script cannot: an abbreviation spelled with spaces that the voice mangles, a past-tense "read" spoken as "reed", or a possessive that runs words together. Fix each one in the pronunciation dictionary, in `spokenNarration`, or by rewording, then synthesize again.
 
 Narration clips now cache by text and voice settings. A wording edit resynthesizes changed clips. Timing still uses measured audio and action estimates: inspect spoken instructions around clicks and scene cuts. Global stream duration alone does not prove synchronization.
 

@@ -1,8 +1,7 @@
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ensureAlignEnv } from './lib/align-venv.mjs';
-import { demoVideoHome } from './lib/npm-env.mjs';
+import { alignEnvironment, ensureAlignEnv } from './lib/align-venv.mjs';
 
 const [inputPath, outputPath, ...options] = process.argv.slice(2);
 if (!inputPath || !outputPath) {
@@ -16,9 +15,5 @@ const { pythonBin } = ensureAlignEnv();
 const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'align-subtitles.py');
 execFileSync(pythonBin, [scriptPath, inputPath, outputPath, ...options], {
   stdio: 'inherit',
-  env: {
-    ...process.env,
-    HF_HOME: path.join(demoVideoHome(), '.demovideo_align_models'),
-    HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
-  },
+  env: alignEnvironment(),
 });

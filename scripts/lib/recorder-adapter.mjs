@@ -2,8 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { hideCursor, recordPage, showCursor } from 'testreel';
+import { HumanCursor, POINTER_ACTIONS, boxCenter, cursorSettings, zoomPage } from './human-cursor.mjs';
+import { watchTestreelFailures } from './testreel-failures.mjs';
 
 const RECORDING_FILES = new Set(['.webm', '.mp4', '.gif', '.png', '.json']);
+// testreel nests one FFmpeg expression level per cursor move; past this count its post-processing fails.
+const LINEAR_MOVE_LIMIT = 48;
 
 function cleanOutput(outputDir) {
   for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
@@ -106,22 +110,45 @@ async function setupStep(page, step) {
   }
 }
 
-async function executeStep(recorder, step) {
+/** Count the cursor moves testreel would composite, both branches of every condition included. */
+function cursorMoves(steps = []) {
+  return steps.reduce((total, step) => total + (POINTER_ACTIONS.includes(step.action) || step.action === 'upload' ? 1 : 0)
+    + cursorMoves(step.then) + cursorMoves(step.else), 0);
+}
+
+async function executeStep(recorder, step, cursor) {
   const page = recorder.page;
   await waitBeforeStep(page, step);
   const selector = step.selector ? resolveVars(step.selector) : null;
-  if (selector && ['click', 'clickResponse', 'type', 'fill', 'clear', 'select', 'hover', 'zoom', 'check', 'uncheck'].includes(step.action)) {
+  if (cursor?.zoomOutPending) {
+    cursor.zoomOutPending = false;
+    await zoomPage(page, null, 1);
+  }
+  if (selector && [...POINTER_ACTIONS, 'zoom'].includes(step.action)) {
     await prepareSelector(page, selector, step);
   }
+  // With the human cursor, the adapter zooms the page itself; testreel's zoom needs its own cursor events.
+  const clickZoom = Boolean(cursor) && ['click', 'clickResponse'].includes(step.action) && step.zoom > 1;
+  if (clickZoom) await zoomPage(page, await boxCenter(locator(page, selector)), step.zoom);
+  if (cursor && selector && POINTER_ACTIONS.includes(step.action)) await cursor.moveTo(locator(page, selector));
+  const zoom = cursor ? undefined : step.zoom;
   let includesBuiltInPause = false;
   switch (step.action) {
     case 'wait': await recorder.wait(step.ms ?? 1000); includesBuiltInPause = true; break;
-    case 'click': await recorder.click(selector, { timeout: step.timeout, zoom: step.zoom, zoomOut: step.zoomOut }); includesBuiltInPause = true; break;
+    case 'click': await recorder.click(selector, { timeout: step.timeout, zoom, zoomOut: step.zoomOut }); includesBuiltInPause = true; break;
     case 'type': await recorder.type(selector, resolveVars(step.text), { delay: step.delay, clear: step.clear, timeout: step.timeout }); includesBuiltInPause = true; break;
     case 'fill': await recorder.fill(selector, resolveVars(step.text), { timeout: step.timeout }); includesBuiltInPause = true; break;
     case 'hover': await recorder.hover(selector, { timeout: step.timeout }); includesBuiltInPause = true; break;
     case 'scroll': await recorder.scroll({ x: step.x, y: step.y, scrollSpeed: step.scrollSpeed }); includesBuiltInPause = true; break;
-    case 'zoom': await recorder.zoom({ selector, scale: step.scale, x: step.x, y: step.y, duration: step.duration }); includesBuiltInPause = true; break;
+    case 'zoom':
+      if (cursor) {
+        const point = selector ? await boxCenter(locator(page, selector)) : step.x !== undefined ? { x: step.x, y: step.y } : null;
+        await zoomPage(page, point, step.scale ?? 2, step.duration ?? 600);
+      } else {
+        await recorder.zoom({ selector, scale: step.scale, x: step.x, y: step.y, duration: step.duration });
+        includesBuiltInPause = true;
+      }
+      break;
     case 'keyboard': await recorder.keyboard(step.key); includesBuiltInPause = true; break;
     case 'navigate': await recorder.navigate(resolveVars(step.url)); includesBuiltInPause = true; break;
     case 'screenshot': await recorder.screenshot(step.name); includesBuiltInPause = true; break;
@@ -133,6 +160,7 @@ async function executeStep(recorder, step) {
     case 'upload': {
       const visual = resolveVars(step.visualSelector ?? step.selector);
       await prepareSelector(page, visual, step);
+      if (cursor) await cursor.moveTo(locator(page, visual));
       await locator(page, selector).waitFor({ state: 'attached', timeout: step.timeout ?? 8000 });
       await recorder.hover(visual, { timeout: step.timeout });
       await locator(page, selector).setInputFiles(Array.isArray(step.files) ? step.files.map(resolveVars) : resolveVars(step.files));
@@ -141,6 +169,7 @@ async function executeStep(recorder, step) {
     case 'check':
     case 'uncheck':
       await recorder.hover(selector, { timeout: step.timeout });
+      if (cursor) await cursor.ripple();
       if (step.action === 'check') await locator(page, selector).check();
       else await locator(page, selector).uncheck();
       break;
@@ -151,7 +180,7 @@ async function executeStep(recorder, step) {
         { timeout: step.timeout ?? 10000 },
       );
       const [, response] = await Promise.all([
-        recorder.click(selector, { timeout: step.timeout, zoom: step.zoom, zoomOut: step.zoomOut }),
+        recorder.click(selector, { timeout: step.timeout, zoom, zoomOut: step.zoomOut }),
         responsePromise,
       ]);
       includesBuiltInPause = true;
@@ -163,7 +192,7 @@ async function executeStep(recorder, step) {
     case 'assert': await assertStep(page, step); break;
     case 'if': {
       const branch = await conditionMatches(page, step.condition) ? step.then : (step.else ?? []);
-      for (const nested of branch ?? []) await executeStep(recorder, nested);
+      for (const nested of branch ?? []) await executeStep(recorder, nested, cursor);
       break;
     }
     case 'waitForNetwork':
@@ -171,10 +200,11 @@ async function executeStep(recorder, step) {
         timeout: step.timeout ?? 10000,
       });
       break;
-    case 'hideCursor': await hideCursor(page); break;
-    case 'showCursor': await showCursor(page); break;
+    case 'hideCursor': await (cursor ? cursor.hide() : hideCursor(page)); break;
+    case 'showCursor': await (cursor ? cursor.show() : showCursor(page)); break;
     default: throw new Error(`Unknown action ${step.action}.`);
   }
+  if (clickZoom && step.zoomOut !== false) cursor.zoomOutPending = true;
   if (step.action !== 'wait') {
     const requiredPause = step.pauseAfter ?? 500;
     const remainingPause = includesBuiltInPause ? Math.max(0, requiredPause - 500) : requiredPause;
@@ -189,6 +219,11 @@ export async function recordDefinition(definitionPath, options = {}) {
   const outputDir = options.outputDir ?? './testreel-output';
   fs.mkdirSync(outputDir, { recursive: true });
   if (options.clean) cleanOutput(outputDir);
+  const cursorMode = cursorSettings(definition);
+  if (cursorMode.enabled && !cursorMode.human && cursorMoves(definition.steps) > LINEAR_MOVE_LIMIT) {
+    throw new Error(`cursor.motion "linear" supports at most ${LINEAR_MOVE_LIMIT} cursor moves per recording; `
+      + 'testreel drops the cursor, chrome, and background beyond that. Use the default "human" motion or split the recording.');
+  }
   const browser = await chromium.launch({ headless: options.headless ?? true });
   const stateCandidate = definition.storageState ? path.resolve(resolveVars(definition.storageState)) : undefined;
   let state = stateCandidate && fs.existsSync(stateCandidate) ? stateCandidate : undefined;
@@ -219,19 +254,19 @@ export async function recordDefinition(definitionPath, options = {}) {
       }
     }
 
+    const viewport = definition.viewport ?? { width: 1280, height: 720 };
     const context = await browser.newContext({
-      viewport: definition.viewport ?? { width: 1280, height: 720 },
+      viewport,
       colorScheme: definition.colorScheme ?? 'light',
       storageState: state,
       extraHTTPHeaders: definition.headers,
-      recordVideo: {
-        dir: outputDir,
-        size: definition.viewport ?? { width: 1280, height: 720 },
-      },
+      recordVideo: { dir: outputDir, size: viewport },
     });
+    if (cursorMode.human) await HumanCursor.install(context, cursorMode.options);
     if (!definition.setup && definition.cookies?.length) await context.addCookies(definition.cookies);
     const videoStartedAt = Date.now();
     const page = await context.newPage();
+    const cursor = cursorMode.human ? new HumanCursor(page, viewport, definition.steps) : null;
     if (!definition.setup && definition.localStorage && Object.keys(definition.localStorage).length) {
       await page.goto(resolveVars(definition.url), { waitUntil: 'commit', timeout: 20_000 });
       await page.evaluate((entries) => {
@@ -250,7 +285,7 @@ export async function recordDefinition(definitionPath, options = {}) {
     const recorder = await recordPage(page, {
       outputDir,
       name: path.basename(typeof definitionPath === 'string' ? definitionPath : 'recording', '.json'),
-      cursor: definition.cursor,
+      cursor: cursorMode.human ? false : definition.cursor,
       chrome: definition.chrome,
       background: definition.background,
       speed: definition.speed,
@@ -258,8 +293,19 @@ export async function recordDefinition(definitionPath, options = {}) {
       keepIntermediates: definition.keepIntermediates,
       videoStartedAt,
     });
-    for (const step of definition.steps ?? []) await executeStep(recorder, step);
-    return await recorder.stop();
+    for (const step of definition.steps ?? []) await executeStep(recorder, step, cursor);
+    if (cursor?.zoomOutPending) await zoomPage(page, null, 1);
+    const watch = watchTestreelFailures();
+    let result;
+    try {
+      result = await recorder.stop();
+    } finally {
+      watch.stop();
+    }
+    if (watch.failures.length) {
+      throw new Error(`testreel ${watch.failures.join('; ')}. The capture lacks its cursor, frame, or speed treatment.`);
+    }
+    return result;
   } finally {
     await browser.close();
   }

@@ -2,6 +2,8 @@
   "capture": {
     "type": "desktop",
     "fps": 30,
+    "motion": "human",
+    "windowTitle": "REPLACE_WITH_APP_WINDOW_TITLE",
     "platforms": {
       "win32": { "input": "desktop" },
       "linux": { "input": ":0.0", "videoSize": "1920x1080" },
@@ -13,8 +15,8 @@
   },
   "outputSize": { "width": 1920, "height": 1080 },
   "narrationConfig": {
-    "engine": "piper",
-    "piperVoice": "en_US-ryan-medium",
+    "engine": "kokoro",
+    "kokoroVoice": "am_michael",
     "fallbackEngine": null,
     "cacheNarration": true,
     "strictNarration": true,
@@ -22,6 +24,7 @@
   },
   "quality": {
     "encoder": "auto",
+    "deglitch": true,
     "allowedInternalBlankMs": 2000,
     "pacingAnalysis": false
   },

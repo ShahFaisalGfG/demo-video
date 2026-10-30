@@ -1,6 +1,6 @@
 ---
 name: demo-video
-description: "Create and revise narrated product demos, how-to tutorials, and step-by-step video guides for websites and desktop apps. Uses Piper narration, framed screen capture, focus zooms, synchronized ASS/SRT captions, and fast edits to existing videos."
+description: "Create and revise narrated product demos, how-to tutorials, and step-by-step video guides for websites and desktop apps. Uses Kokoro narration (Piper as the second engine), human-like cursor motion, framed screen capture, focus zooms, synchronized ASS/SRT captions, speech-checked audio, and fast edits to existing videos."
 ---
 
 # Demo video
@@ -48,6 +48,10 @@ Use these actions when state matters:
 - `if` for nested state-dependent action lists.
 - `upload` with `visualSelector` to show the visible file control while attaching files through the browser input.
 
+Browser recordings move the cursor like a hand by default (`cursor.motion: "human"`): curved, eased reaches whose length sets their duration, a small overshoot on long reaches, and a ripple on every click. The cursor is drawn in the page, so a recording has no limit on cursor moves. `cursor.motion: "linear"` keeps testreel's straight composited cursor, which supports at most 48 moves per recording; the recorder refuses more instead of losing the cursor, frame, and background.
+
+For native desktop capture, the runner moves the system pointer the same way and types with a varied rhythm (`capture.motion: "human"`). Set `capture.windowTitle` to part of the application's window title; on Windows, input stops the moment another window takes the foreground, such as a notification or chat popup. Before a desktop take, ask the user to turn on Do Not Disturb, close chat and mail apps, and keep hands off the mouse and keyboard until the take ends. Set `quality.deglitch: true` to replace repaint flashes and frames that jump away and return within twelve frames (0.4 seconds at 30 fps); it also hides an intended change that short, so review the result.
+
 Keep route changes at clip boundaries when a page mounts through a blank shell. Split long workflows into `__partN` recordings and merge them afterward. Use `framingSelectors` on narrated steps so the verifier can reject clipped or below-fold content.
 
 Use `authRefresh` with environment-provided credentials for expiring sessions. Never place credentials in the recording file.
@@ -58,11 +62,12 @@ Build a clear tutorial around the viewer's intended outcome:
 
 - Start from a 1920x1080 browser viewport and render client-facing browser demos at 2560x1440 unless the user requests another format.
 - Place the product inside a dark presentation stage with 32 pixels of padding, a 16-pixel corner radius, visible window chrome, and a descriptive title instead of a raw URL.
-- Use a large pointer cursor, visible click ripples, controlled scrolls, and short holds so viewers can follow every interaction.
+- Use a large pointer cursor with human motion, visible click ripples, controlled scrolls, and short holds so viewers can follow every interaction.
 - Zoom to roughly 1.3x to 1.5x around the control or result being explained, then return to 1x before moving to another section.
 - Use highlights, overlays, or supporting visualizations only when they clarify the workflow. Keep them visually consistent with the product.
 - Prefer several focused clips over one long capture. Put route changes, major modal transitions, and slow data loads at clip boundaries.
 - Remove loading screens, dead time, and long silent holds. Let the narration lead each action and keep the resulting state visible long enough to understand it.
+- Speed up dead time only by whole numbers (2x, 3x, or 4x). Fractional speed-ups drop frames unevenly and make cursor motion stutter.
 - Use `libx264` for deterministic final quality. Use hardware encoding only when a comparison confirms that it preserves text, borders, gradients, and cursor detail.
 
 The starter browser definition contains this QHD stage treatment and an example zoom. Adapt the style to the product and requested reference. Output resolution alone cannot improve detail missing from the capture.
@@ -72,17 +77,20 @@ The starter browser definition contains this QHD stage treatment and an example 
 Write narration for speech, not as documentation:
 
 - Use one idea per sentence and usually no more than 28 words.
+- Write continuous, conversational narration that says what each step is doing as it starts. Short caption-style lines separated by silence sound like a voice that waits, then blurts a few words without context.
 - Prefer direct verbs and short transitions.
 - Avoid dense parentheticals, long lists, and unexplained acronyms.
 - Read product names, abbreviations, numbers, and dates aloud before rendering.
 
 The pipeline preserves `narration` as the caption text while synthesizing a separate speech-friendly form. Add project vocabulary through `narrationConfig.pronunciations` or `pronunciationFile`. Set `strictNarration: true` for production work so long sentences and unknown acronyms stop the render.
 
-Audio mastering is enabled by default. It applies speech-band filtering, compression, loudness normalization, and limiting. Keep it enabled unless a supplied voice track is already mastered. Piper is the primary engine. Use `engine: "piper"` with `piperVoice: "en_US-ryan-medium"` for the established neutral US male narration, and review the selected voice model card before client delivery.
+Both engines read plain capitals letter by letter, so map a spelled abbreviation to itself (`"SPF": "SPF"`). Never spell letters with spaces or as words: "A P I" is read as "a P I" and "ay pee eye" as "eye pee eye". Use hyphenated letters (`"AWS": "A-W-S"`) for the few abbreviations read as words. Plurals such as "IDs" are spelled automatically ("I-Dees") so the s stays audible. For words spelled alike but said differently, set `spokenNarration` on the step: the caption keeps `narration` and the voice speaks the override, for example past-tense "read" written as "red".
+
+Audio mastering is enabled by default. It applies speech-band filtering, compression, loudness normalization, and limiting. Keep it enabled unless a supplied voice track is already mastered. Kokoro v1.0 is the primary engine, with the US English male voice `am_michael` and the full-precision model; `kokoroVoice`, `kokoroPrecision` (`fp32`, `fp16`, `int8`), and `kokoroLang` change them. Piper is the second engine: use `engine: "piper"` with `piperVoice: "en_US-ryan-medium"` when the user asks for Piper or Kokoro is unavailable. Review the selected voice model card before client delivery.
 
 For automatic voice choice, provide two or more `voiceCandidates`. The selector synthesizes one short calibration passage per candidate, scores it, caches the winner, and generates the full narration once. Use `voiceSelection.mode: "cached-asr"` to add pronunciation scoring when the existing faster-whisper cache is available without downloading anything during the render. Use `"verified"` only when first-run model setup time is acceptable.
 
-Piper failures stop by default; an engine change requires an explicit `fallbackEngine: "tiny-tts"` configuration. Unchanged narration clips are cached by spoken text and voice settings. `cacheNarration: false` forces fresh clips. For a named presenter, address the viewer directly in that presenter's voice.
+Engine failures stop by default; a voice change requires an explicit `fallbackEngine` (`"piper"` or `"tiny-tts"`), and narration within one recording definition that mixes voices because a fallback ran for only some clips stops the render; keep every `__partN` definition on the same engine and voice. Unchanged narration clips are cached by spoken text and voice settings. `cacheNarration: false` forces fresh clips. For a named presenter, address the viewer directly in that presenter's voice.
 
 ## Verify and render
 
@@ -109,7 +117,17 @@ Render a silent walkthrough with the same owned adapter:
 DEMO_BASE_URL=<url> node ~/.demo_video/scripts/record-video.mjs demo/<name>.recording.json demo/output
 ```
 
-The compiler checks narration freshness, trims startup loading, and rejects long blank intervals. The browser starter selects `libx264`; existing definitions can still request automatic hardware selection.
+The compiler checks narration freshness, trims startup loading, rejects long blank intervals, and refuses a capture whose cursor, frame, or speed post-processing failed. The browser starter selects `libx264`; existing definitions can still request automatic hardware selection.
+
+Check the narration with speech recognition before delivery. The verifier transcribes every clip with faster-whisper `large-v3-turbo`, compares the words with the captions, and lists words such as "read", "record", and "live" with their phonemes so tense and stress can be reviewed. With the final video it also checks the whole soundtrack in order and each caption's start:
+
+```bash
+node ~/.demo_video/scripts/verify-narration.mjs demo/<name>.recording.json
+node ~/.demo_video/scripts/verify-narration.mjs demo/<name>__part1.recording.json demo/<name>__part2.recording.json \
+  --video demo/output/<name>.mp4 --srt demo/output/<name>.srt
+```
+
+Fix every reported difference in the pronunciation dictionary or `spokenNarration`, synthesize again, and rerun the check. Add `narrationConfig.asrEquivalents` only for spellings the recognizer writes differently from the caption, such as `{ "limited-use": "Limited Use" }`.
 
 ## Merge, captions, and timing
 
@@ -179,12 +197,13 @@ Before delivery:
 
 1. Confirm every requested action and result is visible.
 2. Confirm no page transition leaves a long blank frame.
-3. Confirm narration is clear, correctly pronounced, and synchronized.
+3. Confirm narration is clear, correctly pronounced, and synchronized: run `verify-narration.mjs` on the clips and on the final soundtrack, and listen to the opening and every edited line.
 4. Confirm captions use one or two short lines and match speech timing.
 5. Run OCR or reference-image checks for claims that must appear in the encoded frames.
 6. Probe the final MP4 for H.264 video, AAC audio, and matching stream durations.
-7. Run `verify-video.mjs` and inspect representative frames, including submission results and error-toast regions.
-8. Run `doctor.mjs` on the delivery host when the video depends on native capture, hardware encoding, or optional local models.
+7. Run `verify-video.mjs` and inspect representative frames, including submission results and error-toast regions. It fails on single-frame flashes and lists frames that jump away and return; review each one, or pass `--strict` to fail on them.
+8. Keep the video within any length the user set; speed up dead time at whole-number rates rather than fractional ones.
+9. Run `doctor.mjs` on the delivery host when the video depends on native capture, hardware encoding, or optional local models.
 
 When changing this skill, run:
 
@@ -193,4 +212,4 @@ node ~/.demo_video/scripts/self-test.mjs --with-ocr
 node ~/.demo_video/scripts/release-test.mjs
 ```
 
-The self-test covers the owned recorder, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, GOP patching, OCR evidence, and a mocked semantic endpoint. Add `--with-asr` to test pronunciation scoring when the tiny faster-whisper model is already cached. The bundled CI workflow runs the core suite on Windows, macOS, and Linux.
+The self-test covers the owned recorder with the human cursor, the linear cursor limit, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation and spoken overrides, the narration comparison rule, audio mastering, pacing analysis, encoder selection, GOP patching, OCR evidence, and a mocked semantic endpoint. Add `--with-asr` to test pronunciation scoring when the tiny faster-whisper model is already cached. The release test uses TinyTTS; add `--with-kokoro` or `--with-piper` to run its narration checks with that engine. The bundled CI workflow runs the core suite on Windows, macOS, and Linux.

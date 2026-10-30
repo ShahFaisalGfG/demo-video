@@ -21,33 +21,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { demoVideoHome } from './npm-env.mjs';
+import { systemPython, venvBin } from './python-venv.mjs';
 
 const VENV_DIRNAME = '.demovideo_venv';
 const MIN_PIPER_VERSION = '1.6.0';
 
 let cached;
-
-function isWindows() {
-  return process.platform === 'win32';
-}
-
-function venvBin(venvDir, exe) {
-  return isWindows()
-    ? path.join(venvDir, 'Scripts', `${exe}.exe`)
-    : path.join(venvDir, 'bin', exe);
-}
-
-function findSystemPython() {
-  for (const candidate of ['python3', 'python']) {
-    try {
-      execFileSync(candidate, ['--version'], { stdio: 'ignore' });
-      return candidate;
-    } catch {
-      // try the next candidate
-    }
-  }
-  throw new Error('No "python3" or "python" found on PATH. Install Python 3 to use the piper voice engine.');
-}
 
 function resolveVenvDir(cfg = {}) {
   if (cfg.venvDir) return cfg.venvDir;
@@ -92,7 +71,7 @@ function isAtLeast(version, min) {
 function createVenv(venvDir) {
   fs.mkdirSync(path.dirname(venvDir), { recursive: true });
   console.log(`[piper-venv] creating isolated venv at ${venvDir} ...`);
-  execFileSync(findSystemPython(), ['-m', 'venv', venvDir], { stdio: 'inherit' });
+  execFileSync(systemPython('Piper narration'), ['-m', 'venv', venvDir], { stdio: 'inherit' });
   console.log('[piper-venv] installing piper-tts ...');
   execFileSync(venvBin(venvDir, 'pip'), ['install', '--quiet', `piper-tts>=${MIN_PIPER_VERSION}`], {
     stdio: 'inherit',

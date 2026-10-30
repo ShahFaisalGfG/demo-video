@@ -5,11 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { synthesize } from './synthesize.mjs';
 import { prepareNarration } from './narration-text.mjs';
-import { alignEnvReady, alignPython, ensureAlignEnv } from './align-venv.mjs';
-import { demoVideoHome } from './npm-env.mjs';
+import { ALIGN_MODEL_DIR, alignEnvReady, alignEnvironment, alignPython, ensureAlignEnv } from './align-venv.mjs';
 
 function candidateId(candidate, index) {
-  return candidate.id ?? candidate.label ?? candidate.piperVoice ?? candidate.speaker ?? `candidate-${index + 1}`;
+  return candidate.id ?? candidate.label ?? candidate.kokoroVoice ?? candidate.piperVoice ?? candidate.speaker
+    ?? `candidate-${index + 1}`;
 }
 
 function pcmMetrics(file, wordCount) {
@@ -82,7 +82,7 @@ export async function selectVoice(config, narrationLines, projectCache, definiti
   })).digest('hex').slice(0, 16);
   const selectionDir = path.join(projectCache, 'voice-selections', hash);
   const reportPath = path.join(selectionDir, 'report.json');
-  const modelDir = path.join(demoVideoHome(), '.demovideo_align_models');
+  const modelDir = ALIGN_MODEL_DIR;
   const canUseCachedAsr = alignEnvReady() && modelCached(modelDir, model);
   fs.mkdirSync(selectionDir, { recursive: true });
   if (fs.existsSync(reportPath)) {
@@ -123,7 +123,7 @@ export async function selectVoice(config, narrationLines, projectCache, definiti
     const scorer = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'score-voices.py');
     execFileSync(pythonBin, [scorer, manifestPath, reportPath], {
       stdio: 'inherit',
-      env: { ...process.env, HF_HOME: modelDir, HF_HUB_DISABLE_SYMLINKS_WARNING: '1' },
+      env: alignEnvironment(),
     });
     report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
     report.mode = 'asr-and-acoustic';

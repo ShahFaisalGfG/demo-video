@@ -12,6 +12,8 @@ import { selectEncoder } from './lib/encoder.mjs';
 import { masterAudio } from './lib/audio-mastering.mjs';
 import { selectVoice } from './lib/voice-selection.mjs';
 import { disposeSynthesizer } from './lib/synthesize.mjs';
+import { humanPath, seededRandom } from './lib/human-cursor.mjs';
+import { alignEnvReady, alignPython } from './lib/align-venv.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-video-self-test-'));
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +59,7 @@ try {
     url: selfTestUrl,
     viewport: { width: 800, height: 500 },
     outputFormat: 'mp4',
+    background: { color: '#0b1020', padding: 16 },
     steps: [
       { action: 'check', selector: '#flag' },
       { action: 'assert', selector: '#flag', kind: 'checked' },
@@ -68,10 +71,54 @@ try {
   const { recordDefinition } = await import('./lib/recorder-adapter.mjs');
   const recorded = await recordDefinition(definitionPath, { outputDir: path.join(root, 'recorded'), clean: true });
   if (!fs.existsSync(recorded.video) || duration(recorded.video) < 2) throw new Error('Owned adapter output is invalid.');
+  const resultTime = Number((duration(recorded.video) - 0.6).toFixed(2));
+  const corner = execFileSync(ffmpegStatic, ['-v', 'error', '-ss', '1', '-i', recorded.video, '-frames:v', '1',
+    '-vf', 'crop=4:4:0:0', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+  if (corner.length < 3 || Math.max(corner[0], corner[1], corner[2]) > 60) {
+    throw new Error('The human cursor recording lost its post-processed background.');
+  }
+  const linearDefinition = { url: selfTestUrl, cursor: { motion: 'linear' },
+    steps: Array.from({ length: 49 }, () => ({ action: 'hover', selector: '#go' })) };
+  await recordDefinition(linearDefinition, { outputDir: path.join(root, 'linear') }).then(
+    () => { throw new Error('Linear cursor motion accepted more moves than testreel can composite.'); },
+    (error) => { if (!/at most 48/.test(error.message)) throw error; },
+  );
 
-  const prepared = prepareNarration('Import CSV and XML through the API.', {});
-  if (!prepared.spokenText.includes('C S V') || !prepared.spokenText.includes('A P I')) {
-    throw new Error('Pronunciation dictionary was not applied.');
+  const path1 = humanPath({ x: 100, y: 100 }, { x: 1000, y: 600 }, seededRandom(7), 30);
+  const path2 = humanPath({ x: 100, y: 100 }, { x: 1000, y: 600 }, seededRandom(7), 30);
+  const last = path1.points.at(-1);
+  const offLine = Math.max(...path1.points.map(({ x, y }) => Math.abs((x - 100) * 500 - (y - 100) * 900) / Math.hypot(900, 500)));
+  if (JSON.stringify(path1) !== JSON.stringify(path2) || Math.hypot(last.x - 1000, last.y - 600) > 0.01
+    || path1.durationMs < 260 || path1.durationMs > 1100 || offLine < 1) {
+    throw new Error('Human cursor paths must be repeatable, curved, timed within human limits, and end on target.');
+  }
+  if (humanPath({ x: 0, y: 0 }, { x: 60, y: 0 }, seededRandom(1), 30).durationMs >= path1.durationMs) {
+    throw new Error('Short reaches must take less time than long reaches.');
+  }
+
+  const prepared = prepareNarration('Export the IDs as CSV through the API on AWS.', {});
+  if (!prepared.spokenText.includes('CSV') || !prepared.spokenText.includes('API')
+    || !prepared.spokenText.includes('I-Dees') || !prepared.spokenText.includes('A-W-S')) {
+    throw new Error(`Pronunciation dictionary was not applied: ${prepared.spokenText}`);
+  }
+  const overridden = prepareNarration('Nuvora read both copies.', { pronunciations: { Nuvora: 'New Vora' } }, root,
+    'Nuvora red both copies.');
+  if (overridden.displayText !== 'Nuvora read both copies.' || overridden.spokenText !== 'New Vora red both copies.') {
+    throw new Error('Spoken narration must change the speech and keep the caption.');
+  }
+  if (!prepareNarration('Open the API.', { pronunciations: { API: 'A P I' } }).warnings.some((item) => /article/.test(item))) {
+    throw new Error('Spaced letters starting with A must be reported.');
+  }
+  if (alignEnvReady()) {
+    execFileSync(alignPython(), ['-I', '-c', [
+      'import importlib.util, sys',
+      `spec = importlib.util.spec_from_file_location("verify", ${JSON.stringify(path.join(scriptsDir, 'verify-narration.py'))})`,
+      'module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)',
+      't = module.tokens',
+      'ok = module.differences(t("Nuvora read both copies."), t("New Vora red both copies."), t("New Vora read both copies."), set())',
+      'bad = module.differences(t("Open the API settings."), t("Open the ay pee eye settings."), t("Open the IPI settings."), set())',
+      'sys.exit(0 if not ok and bad else 1)',
+    ].join('\n')], { stdio: 'inherit' });
   }
   const encoder = selectEncoder('auto');
   const voiceMode = process.argv.includes('--with-asr') ? 'cached-asr' : 'fast';
@@ -128,7 +175,7 @@ try {
   fs.writeFileSync(semanticChecks, JSON.stringify({
     baseUrl: `${selfTestUrl}/v1`,
     model: 'mock-vlm',
-    checks: [{ name: 'completed', timestamp: 3, claim: 'The completed state is visible.' }],
+    checks: [{ name: 'completed', timestamp: resultTime, claim: 'The completed state is visible.' }],
   }));
   const semanticReport = path.join(root, 'semantic-report.json');
   await runNode([path.join(scriptsDir, 'verify-semantic-evidence.mjs'), recorded.video,
@@ -137,7 +184,7 @@ try {
 
   if (process.argv.includes('--with-ocr')) {
     const checks = path.join(root, 'visual.json');
-    fs.writeFileSync(checks, JSON.stringify([{ name: 'completed', timestamp: 3, expectedText: ['Done'] }]));
+    fs.writeFileSync(checks, JSON.stringify([{ name: 'completed', timestamp: resultTime, expectedText: ['Done'] }]));
     execFileSync(process.execPath, [path.join(scriptsDir, 'verify-visual-evidence.mjs'), recorded.video,
       checks, path.join(root, 'visual-report.json')], { stdio: 'inherit' });
   }

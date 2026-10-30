@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js ≥ 20 (required by `testreel`).
-- Python 3 (just the interpreter - `venv` and `pip` come with it), for Piper, alignment, OCR, and native desktop automation. TinyTTS can be selected explicitly when Python is unavailable.
+- Python 3 (just the interpreter - `venv` and `pip` come with it), for Kokoro, Piper, alignment, narration verification, OCR, and native desktop automation. TinyTTS can be selected explicitly when Python is unavailable.
 - Everything else - npm packages, the Chromium browser, the Python venv, voice models - is installed automatically into `~/.demo_video` the first time `bootstrap.mjs` runs. Nothing to install by hand, and nothing touches the project.
 
 ## Isolated environment (`~/.demo_video`)
@@ -14,11 +14,13 @@ Nothing this skill needs - npm packages, the Chromium browser, the Python venv, 
 ~/.demo_video/
 ├── package.json, node_modules/ - testreel, playwright, tiny-tts, ffmpeg-static, ffprobe-static
 ├── browsers/ - Chromium, via PLAYWRIGHT_BROWSERS_PATH (never Playwright's default shared cache)
+├── .demovideo_kokoro_venv/ - isolated Python venv for Kokoro (kokoro-onnx)
 ├── .demovideo_venv/ - isolated Python venv for Piper
-├── .demovideo_voices/ - downloaded Piper voice models
+├── .demovideo_voices/ - downloaded Piper voices, and Kokoro model files under kokoro/
 ├── .demovideo_align_venv/ - isolated faster-whisper environment
-├── .demovideo_align_models/ - word-alignment model cache
+├── .demovideo_align_models/ - speech model cache for alignment, voice scoring, and narration verification
 ├── .demovideo_ocr_venv/ - isolated OCR and perceptual-image environment
+├── .demovideo_desktop_venv/ - isolated PyAutoGUI, OpenCV, and NumPy environment for desktop input and deglitching
 ├── scripts/ - this skill's pipeline scripts, kept in sync by bootstrap.mjs
 └── cache/<project-hash>/<flow>/ - per-run intermediates (audio clips, resolved definitions, raw video before muxing)
 ```
@@ -31,6 +33,20 @@ Nothing this skill needs - npm packages, the Chromium browser, the Python venv, 
 **Browser discovery:** the bundled compiler sets `PLAYWRIGHT_BROWSERS_PATH` before dynamically importing browser modules. Custom scripts should set it before importing Playwright or testreel; changing it after import is too late.
 
 **Per-project cache isolation:** intermediate files (synthesized clips, the resolved recording definition, silence padding, the raw pre-mux video) are namespaced under `cache/<hash>/`, where `<hash>` is a short SHA of the project's absolute path - so two different projects sharing this same isolated install never collide, even though the tooling itself is shared. A `.project-path` marker file sits alongside each hash for human debugging.
+
+### Isolated Python environments
+
+`scripts/lib/python-venv.mjs` gives every feature environment the same lifecycle: it finds `python3` or `python`, creates the venv when it is missing, recreates it when its interpreter no longer starts, and installs the feature's packages when its import check fails. Kokoro, alignment, OCR, and desktop input use it directly.
+
+Kokoro model files come from the kokoro-onnx `model-files-v1.0` release. Each download streams to a `.partial` file, is checked against a pinned SHA-256 digest, and only then takes its final name in `~/.demo_video/.demovideo_voices/kokoro`. Place the files there yourself for offline or proxied hosts; a file with the expected size is used without downloading.
+
+| Precision | File | Size | Use |
+|---|---|---|---|
+| `fp32` (default) | `kokoro-v1.0.onnx` | 326 MB | Cleanest voice |
+| `fp16` | `kokoro-v1.0.fp16.onnx` | 177 MB | Near-identical voice at half the size |
+| `int8` | `kokoro-v1.0.int8.onnx` | 92 MB | Fastest; slight quality loss |
+
+Every precision also needs `voices-v1.0.bin` (28 MB). One worker process loads the model once and serves every clip of a narration batch over JSON lines (`scripts/kokoro-worker.py`).
 
 ### Isolated Python environment for Piper
 
@@ -52,7 +68,7 @@ If `python3` isn't on `PATH`, `piper-venv.mjs` also tries plain `python` before 
 ```mermaid
 flowchart LR
  A[demo.recording.json<br/>steps + narration text] --> B[generate-narration.mjs]
- B --> C[TTS engine<br/>piper default / explicit tiny-tts fallback]
+ B --> C[TTS engine<br/>kokoro default / piper second / explicit fallback]
  C --> D[audio clips + measured durations]
  B --> E[recording.resolved.json<br/>pauses sized to fit narration]
  E --> F[compile-video.mjs]
@@ -80,7 +96,7 @@ The starter definition uses these presentation settings:
 | Background | `#0b1020` with 32 px padding | Frames the product as a presentation rather than a raw capture |
 | Corners | 16 px | Separates the application window from the stage |
 | Window chrome | Descriptive title | Keeps context visible without exposing a long URL |
-| Cursor | Pointer at size 42 | Makes interactions easy to follow at QHD resolution |
+| Cursor | Pointer at size 42, human motion | Makes interactions easy to follow at QHD resolution and moves like a hand |
 | Encoder | `libx264` | Preserves small interface text and gradients consistently |
 | Focus zoom | 1.3x to 1.5x | Directs attention to controls and results before returning to 1x |
 
@@ -212,7 +228,7 @@ DOM evidence proves that an element existed during the dry run. Visual evidence 
 
 The first run creates `~/.demo_video/.demovideo_ocr_venv` and installs RapidOCR, ONNX Runtime, and Pillow. The verifier extracts a PNG at each timestamp, optionally crops it, runs OCR, computes a 16 by 16 luminance hash, and writes `visual-evidence-report.json` plus the inspected frames. OCR matching is case-insensitive and punctuation-insensitive. Reference-image comparison is suited to layout and framing checks, not pixel-perfect animation matching.
 
-`compact-silence.mjs` uses SRT cue boundaries as the narration authority. Narrated spans remain at normal speed. Gaps are accelerated up to the selected factor while retaining the configured minimum visible gap. The script re-encodes the video and writes a retimed SRT from the same piecewise mapping. Use it only after the full merged MP4 and SRT pass their ordinary checks.
+`compact-silence.mjs` uses SRT cue boundaries as the narration authority. Narrated spans remain at normal speed. Each gap plays at a whole-number speed up to `--silence-speed` (a whole number of 2 or more) while keeping the configured minimum visible gap; a gap too short for 2x stays at normal speed. Whole-number speeds keep every second, third, or fourth frame evenly, while fractional speeds drop frames unevenly and make motion stutter. The script re-encodes the video at the source frame rate and writes a retimed SRT from the same piecewise mapping. Use it only after the full merged MP4 and SRT pass their ordinary checks.
 
 `reflow-subtitles.mjs` converts long narration cues into phrase-level closed captions. It limits word count and line length, balances each phrase across at most two lines, and distributes the original cue interval proportionally across the smaller captions. Run it after merging, insertion, compaction, or any other operation that changes subtitle timestamps.
 
@@ -244,20 +260,24 @@ Set `quality.cacheVisualCapture: true` to opt into visual caching. The cache key
 
 | Field | Default | Meaning |
 |---|---|---|
-| `engine` | `"piper"` | `"piper"` or `"tiny-tts"` |
-| `fallbackEngine` | `null` | Explicit `"tiny-tts"` allows fallback; otherwise Piper failures stop synthesis |
+| `engine` | `"kokoro"` | `"kokoro"`, `"piper"`, or `"tiny-tts"` |
+| `fallbackEngine` | `null` | `"piper"` or `"tiny-tts"` allows an engine change when the primary fails; otherwise failures stop synthesis. Narration within one definition that mixes voices stops the render |
 | `cacheNarration` | `true` | Reuse clips with matching speech and voice settings; false forces synthesis |
+| `kokoroVoice` | `"am_michael"` | Kokoro voice (US English male); its prefix selects the language (`am_`/`af_` US English, `bm_`/`bf_` British English) |
+| `kokoroPrecision` | `"fp32"` | Kokoro model precision: `"fp32"`, `"fp16"`, or `"int8"` |
+| `kokoroLang` | from the voice | Explicit espeak-ng language code, such as `"en-us"` or `"en-gb"` |
+| `kokoroModel` / `kokoroVoices` | - | Local `.onnx` model and voices `.bin` files instead of the pinned downloads |
 | `piperVoice` | `"en_US-ryan-medium"` | Piper voice name (male, US English); model auto-downloads on first use |
 | `piperModel` | - | Explicit path to a `.onnx` file, skips auto-download |
 | `piperSpeaker` | - | Numeric speaker ID, only relevant for multi-speaker Piper voices |
 | `speaker` | `"MALE"` | tiny-tts speaker (`"MALE"`/`"FEMALE"`) - used only if it falls back to tiny-tts |
-| `speed` | `1.0` | Speech rate |
+| `speed` | `1.0` | Speech rate for every engine; values above 1 speak faster |
 | `bufferMs` | `450` | Breathing room added after each narration clip |
 | `actionOverheadMs` | `400` | Rough estimate of click/hover animation time; used only to place a clip's silent lead-in, never truncates audio |
 | `initialSilenceMs` | `0` | Optional narration lead-in for a known opening pause; captured page loading is trimmed automatically during compile |
 | `finalSilenceMs` | `0` | Optional trailing narration silence for a measured encoder/page tail that cannot be represented by an action |
-| `venvDir` | - | Explicit override for the isolated venv's location, bypassing the `~/.demo_video`-based default entirely |
-| `pronunciations` | built-in technical terms | Object mapping displayed terms to speech-friendly spellings; caption text remains unchanged |
+| `venvDir` | - | Explicit override for the isolated Piper venv's location, bypassing the `~/.demo_video`-based default entirely |
+| `pronunciations` | built-in technical terms | Object mapping displayed terms to speech-friendly spellings; caption text remains unchanged. Map spelled abbreviations to plain capitals (`"SPF": "SPF"`) or hyphenated letters (`"AWS": "A-W-S"`), never to spaced letters |
 | `pronunciationFile` | none | JSON pronunciation object relative to the recording definition |
 | `maxSentenceWords` | `28` | Narration lint threshold for sentence length |
 | `strictNarration` | `false` | Fail synthesis when lint finds long sentences or unknown acronyms |
@@ -268,6 +288,9 @@ Set `quality.cacheVisualCapture: true` to opt into visual caching. The cache key
 | `voiceSelection.sampleText` | derived | Stable project calibration text; recommended when several recording parts share one voice |
 | `voiceSelection.sampleWords` | `42` | Maximum derived calibration length when `sampleText` is omitted |
 | `voiceSelection.asrModel` | `"tiny.en"` | Faster-whisper model used for short pronunciation scoring |
+| `asrEquivalents` | `{}` | Recognizer spellings accepted as the caption's words by `verify-narration.mjs`, as `{ "heard": "written" }` |
+
+Narrated steps accept `spokenNarration`: the words given to the voice, while `narration` stays the caption. Use it for words spelled alike but said differently, such as past-tense "read" spoken as "red". It is invalid without `narration` and inside `if` branches, and it does not change the visual cache key.
 
 Steps may include `framingSelectors`, which the structural verifier reads and testreel ignores. Each entry is a selector string or `{ "selector": "...", "minVisibleRatio": 0.85 }`. Use it on narrated steps to prove that the claimed UI is inside the viewport. A section taller than the viewport needs multiple framing steps across its top, middle, and bottom.
 
@@ -284,6 +307,7 @@ The optional root `quality` object supports:
 | `recorder` | `"owned"` | Use the owned adapter; `"testreel-legacy"` is a compatibility escape hatch without advanced actions |
 | `encoder` | `"auto"` | Probe platform hardware encoders and fall back to `libx264` |
 | `cacheVisualCapture` | `false` | Reuse a verified silent capture when visual steps and resolved timing are unchanged |
+| `deglitch` | `false` | Desktop captures: replace single-frame repaint flashes and frames that jump away and return within 12 frames with the last good frame |
 | `visualEvidence` | none | Relative path to final-frame OCR and reference-image checks |
 | `semanticEvidence` | none | Relative path to Qwen-compatible semantic claim checks; requires an explicitly configured endpoint |
 | `pacingAnalysis` | `false` | Run sparse video-only pacing analysis during compile; final video plus SRT analysis is preferred |
@@ -298,8 +322,9 @@ Candidate selection never synthesizes the full narration more than once. It crea
 {
   "narrationConfig": {
     "voiceCandidates": [
-      { "id": "ryan", "engine": "piper", "piperVoice": "en_US-ryan-medium" },
-      { "id": "lessac", "engine": "piper", "piperVoice": "en_US-lessac-medium" }
+      { "id": "michael", "engine": "kokoro", "kokoroVoice": "am_michael" },
+      { "id": "adam", "engine": "kokoro", "kokoroVoice": "am_adam" },
+      { "id": "ryan", "engine": "piper", "piperVoice": "en_US-ryan-medium" }
     ],
     "voiceSelection": {
       "mode": "cached-asr",
@@ -309,7 +334,13 @@ Candidate selection never synthesizes the full narration more than once. It crea
 }
 ```
 
-Review every Piper voice model card before client use because voice-data licenses differ. Use the short voice selector when another language, accent, or tone is requested.
+Review every voice model card before client use because voice-data licenses differ. The default Kokoro `am_michael` voice is a clear American male narrator; Piper `en_US-ryan-medium` remains available for projects that established it. Use the short voice selector when another language, accent, or tone is requested.
+
+### Narration verification
+
+`verify-narration.mjs` checks the audio the way a viewer hears it. It reads the narration manifest of each recording definition (refusing a stale one), transcribes every clip with faster-whisper (`--model`, default `large-v3-turbo`, downloaded once into `.demovideo_align_models`), and compares the words with the caption. A word group counts as wrong only when it differs from both the caption and the words given to the voice, so pronunciation entries and `spokenNarration` overrides pass while a mispronounced word does not. Joined and hyphenated spellings compare equal ("sign in" and "sign-in"), and small numbers match their words.
+
+With `--video`, it transcribes the finished soundtrack and compares the whole script in order; with `--srt`, it also measures how far each caption starts from where its first words are heard and fails above `--max-offset` (default 1.0 second). When the Kokoro environment exists, it lists heteronyms (read, record, live, use, present, and others) in context with their espeak-ng phonemes for tense and stress review; this list is a review aid, not a pass or fail check. The report is written to the project cache or `--report`, and the command exits with an error on any difference unless `--report-only` is set.
 
 ### Scene pacing analysis
 
@@ -341,6 +372,12 @@ Set `capture.type` to `desktop` and use the normal narration plus compile comman
 
 Supported desktop actions are `wait`, `move`, `click`, `doubleClick`, `drag`, `type`, `hotkey`, `press`, `scroll`, `screenshot`, `imageClick`, `assertImage`, and `waitImage`. Coordinates accept absolute `x` and `y` or normalized `xRatio` and `yRatio`. Image paths resolve relative to the original recording definition.
 
+`capture.motion` defaults to `"human"`: the pointer follows a curved, eased reach timed by its length (the same model as the browser cursor), rests briefly before each click, holds the button for a human press length, drags with the button held along the same kind of path, types with a varied rhythm around `interval` (default 0.09 seconds per character) with short pauses after words and punctuation, and turns the wheel in a few steps. `"linear"` restores PyAutoGUI's direct moves and fixed 0.04-second typing. `capture.seed` fixes the random variation; by default it derives from the steps, so a definition replays the same way. Platform overrides under `capture.platforms` apply to the runner as well as the recorder.
+
+`capture.windowTitle` names part of the target window's title. On Windows, every input action first checks the foreground window and stops the take with an error when another window has taken it, so a notification, chat popup, or stray click cannot receive input. Other platforms print a notice and continue without the check. Before a desktop take, ask the user to enable Do Not Disturb, close chat and mail clients, and keep hands off the mouse and keyboard.
+
+Desktop capture can catch a window mid-repaint as a blank or flashing frame. `quality.deglitch: true` streams the capture through `scripts/deglitch-video.py` before muxing: a frame that is a brightness spike against its neighbours, or that differs from the last good frame while a frame within the next twelve returns to it, is replaced by the last good frame. A lasting change is kept. The filter also removes an intended change shorter than twelve frames (0.4 seconds at 30 fps), such as a tooltip that flashes open and closed, so review the result.
+
 Windows uses FFmpeg `gdigrab`. Linux uses `x11grab` and requires `videoSize` plus an X11 display. macOS uses `avfoundation` and requires an explicit screen input index, Screen Recording permission, and Accessibility permission. Linux Wayland varies by compositor; use an X11 session, OBS/portal recording, or `--reuse-video` when direct capture is unavailable.
 
 Use DOM recording for Electron, Tauri, and WebView applications whenever a remote-debug URL is available. Native coordinate automation is more sensitive to display scale, window position, themes, and localization. Prefer `imageClick` and `assertImage` for important state transitions, keep the target window fixed, and use a dedicated desktop session during capture.
@@ -348,6 +385,10 @@ Use DOM recording for Electron, Tauri, and WebView applications whenever a remot
 ## Owned recorder adapter
 
 `scripts/lib/recorder-adapter.mjs` owns action execution and uses testreel only through its exported `recordPage`, cursor, and post-processing functions. Bootstrap never rewrites files under `node_modules`. This keeps upgrades inspectable and prevents an upstream package layout change from leaving a partially patched installation.
+
+`cursor.motion` selects the cursor. `"human"` (default) disables testreel's composited cursor and draws testreel's cursor images inside the page from `scripts/lib/human-cursor.mjs`: a closed shadow root on top of the page, moved along a planned path before every pointer action (`click`, `clickResponse`, `type`, `fill`, `clear`, `select`, `hover`, `check`, `uncheck`, and the visual target of `upload`). Each reach follows a quadratic arc with minimum-jerk speed, takes Fitts-law time (about 0.26 seconds for a short hop up to 1.1 seconds for a long reach), overshoots slightly and settles on reaches over 280 pixels, and lands within a few pixels of the element center. The arrow, hand, or text cursor follows the element under it, a ripple marks each click, the cursor fades after `idleHideMs` (3000) unless `idleHide` is false, and its position survives same-origin navigation. Paths come from a generator seeded by the steps, so the same page layout gives the same paths on every render. The cursor images are decoded in Node and drawn on canvases from pixel data, so a page's content security policy cannot block them and stays in force during recording. The cursor lives in the top frame: over an iframe it shows the arrow, and after a cross-origin navigation it reappears at the next pointer action. testreel builds its stage zoom from its own cursor events, so with the human cursor the adapter performs `zoom` steps and the `zoom` option of `click` and `clickResponse` itself: an eased CSS transform on `<html>` toward the target, which the browser re-renders sharply and which never shows space beyond the page edges. A click zoom returns to the full view before the next step, as testreel's does, and the page's own inline styles on `<html>` are restored afterwards. A transform on `<html>` makes it the containing block for `position: fixed` elements, so on a scrolled page a fixed header, dialog, or toast can shift while zoomed; zoom such screens from the top of the page or skip the zoom.
+
+`"linear"` keeps testreel's cursor, which draws straight constant-speed lines. testreel builds one nested FFmpeg expression level per cursor move, and FFmpeg's parser stops near 50 levels, after which post-processing fails and testreel keeps the raw capture without cursor, chrome, or background. The adapter therefore refuses more than 48 cursor moves in linear mode, and `compile-video.mjs` refuses any capture whose post-processing failed.
 
 The adapter enforces one matched element by default, scrolls selector actions into view, and supports `check`, `uncheck`, `upload`, `clickResponse`, `assert`, and nested `if` actions. Set `allowMultiple: true` only where the chosen action is intentionally applied to the first matching node. `quality.recorder: "testreel-legacy"` invokes the upstream definition runner for compatibility with old files; advanced owned-adapter actions are not available in that mode.
 
@@ -365,23 +406,25 @@ It exercises the owned adapter, state assertions, conditional actions, pronuncia
 
 ## Voice engine choice
 
-Piper is the primary narration engine. TinyTTS is an explicit alternative or opt-in fallback. Piper failures stop by default so a delivery cannot change voices silently.
+Kokoro is the primary narration engine and Piper the second. TinyTTS is an explicit last-resort fallback. Failures stop by default so a delivery cannot change voices silently.
 
-| | `piper` (default) | `tiny-tts` fallback |
-|---|---|---|
-| Setup | Isolated Python venv plus one cached voice model | Pure npm |
-| Batch behavior | Local CLI synthesis per clip | One in-process model |
-| Languages | 30+ | English |
-| License | GPL-3.0 maintained engine; voice licenses vary | Review installed package metadata |
-| Best use | Client narration and multilingual workflows | Emergency fallback and minimal setup |
+| | `kokoro` (default) | `piper` | `tiny-tts` fallback |
+|---|---|---|---|
+| Setup | Isolated Python venv plus pinned model files (354 MB at full precision) | Isolated Python venv plus one cached voice model | Pure npm |
+| Batch behavior | One worker process, model loaded once per batch | Local CLI synthesis per clip | One in-process model |
+| Quality | Most natural prosody of the three | Clear, more synthetic | Basic |
+| Languages | American and British English; voices for other languages depend on espeak-ng phonemization, so review them before use | 30+ | English |
+| License | Apache-2.0 model and voices; kokoro-onnx MIT; espeak-ng GPL-3.0 | GPL-3.0 maintained engine; voice licenses vary | Review installed package metadata |
+| Best use | Client narration | Projects that established a Piper voice, or hosts where Kokoro cannot run | Emergency fallback and minimal setup |
 
 For a different voice, gender, accent, or language, adjust `narrationConfig` and run the short voice selector. Review the selected model or voice card before client distribution.
 
 ## Notes & caveats
 
 - **Sync is best-effort, not frame-exact.** `actionOverheadMs` is a heuristic for how long a click/hover visually takes before the pause window starts - not measured from the actual browser render. Fine for demo/marketing videos; not a substitute for editing in a live NLE if frame-perfect timing is required.
-- **Both available engines need internet access on their first run.** Piper's voice model (~60MB) auto-downloads to `~/.demo_video/.demovideo_voices` (shared across projects); tiny-tts's fallback model (~6MB) auto-downloads from Hugging Face into its own package cache. Both cache locally afterward. Pre-warm the relevant cache directory for network-isolated CI.
-- **Piper's license changed upstream, and it's the default engine here.** The original `rhasspy/piper` (MIT) is archived and unmaintained; the actively maintained fork (`OHF-Voice/piper1-gpl`) is GPL-3.0. Used here only as an external build-time CLI tool to generate audio assets, not bundled into the shipped product - but confirm this is acceptable under the project's own license policy, especially for client work with its own compliance requirements. `"engine": "tiny-tts"` sidesteps it entirely.
+- **Every engine needs internet access on its first run.** Kokoro's model files (354 MB at full precision) download to `~/.demo_video/.demovideo_voices/kokoro` and are checked against pinned digests; Piper's voice model (~60MB) auto-downloads to `~/.demo_video/.demovideo_voices`; tiny-tts's fallback model (~6MB) auto-downloads from Hugging Face into its own package cache. All cache locally afterward and are shared across projects. Pre-warm the relevant cache directory for network-isolated CI.
+- **Piper's license changed upstream.** The original `rhasspy/piper` (MIT) is archived and unmaintained; the actively maintained fork (`OHF-Voice/piper1-gpl`) is GPL-3.0. Used here only as an external build-time CLI tool to generate audio assets, not bundled into the shipped product - but confirm this is acceptable under the project's own license policy, especially for client work with its own compliance requirements. Kokoro, the default engine, uses Apache-2.0 model weights and voices; it phonemizes with espeak-ng (GPL-3.0) through `espeakng-loader`, also only as an external build-time tool.
+- **testreel's FFmpeg zoom scales in whole-pixel steps** (linear cursor with chrome or background only). Its zoom filter rounds the scaled frame to even pixel sizes every frame, so fine text can wobble slightly during a zoom ramp. Keep zooms moderate (1.3x to 1.5x), hold the zoomed view while narration explains it, and inspect the ramp at delivery size.
 - **Don't guess selectors or the flow to demo.** These are the two materially project-specific parts this skill cannot generalize away - resolve them via `playwright codegen` / DOM inspection and a quick check-in with the user, per the main workflow in SKILL.md.
 - **Owned-adapter action errors are fatal.** The recorder requires one selector match by default, scrolls it into view, waits for the required state, and throws when an action or assertion fails. A timeout inside a slow dialog can use an explicit `timeout` of 8000 to 10000 ms. A successful render still needs application-state and visual-evidence checks because an accepted server request can produce the wrong business result without a browser action error. `testreel-legacy` retains upstream best-effort behavior and should only be used for compatibility with reviewed old definitions.
  - The compiler refuses to mux when any step pre-check fails or when the root `waitForSelector` never becomes ready. An expired authenticated storage state commonly redirects to Login and triggers the latter guard. Refresh the state and rerun; do not reuse the captured video.

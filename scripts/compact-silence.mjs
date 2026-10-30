@@ -25,6 +25,9 @@ function optionValue(name, fallback) {
 }
 
 const silenceSpeed = optionValue('--silence-speed', 4);
+if (!Number.isInteger(silenceSpeed) || silenceSpeed < 2) {
+  throw new Error('--silence-speed must be a whole number of 2 or more; fractional speeds drop frames unevenly and stutter.');
+}
 const minimumGapSeconds = optionValue('--minimum-gap-ms', 500) / 1000;
 const encoderIndex = options.indexOf('--encoder');
 const encoder = selectEncoder(encoderIndex < 0 ? 'auto' : options[encoderIndex + 1]);
@@ -65,6 +68,10 @@ const duration = Number(execFileSync(ffprobePath, [
   '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', inputVideo,
 ]).toString().trim());
 if (!Number.isFinite(duration) || duration <= 0) throw new Error('Could not read the input video duration.');
+const frameRate = execFileSync(ffprobePath, [
+  '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', '-of', 'csv=p=0', inputVideo,
+]).toString().trim();
+if (!/^\d+(\/\d+)?$/.test(frameRate)) throw new Error('Could not read the input frame rate.');
 
 for (let index = 0; index < cues.length; index += 1) {
   const cue = cues[index];
@@ -78,18 +85,18 @@ for (let index = 0; index < cues.length; index += 1) {
 
 const segments = [];
 let cursor = 0;
+// Silent gaps play at a whole-number speed (every second, third, or fourth frame, evenly), never below the
+// minimum visible gap; a gap too short for 2x stays at normal speed.
 function addSegment(start, end, narrated) {
   if (end - start < 0.001) return;
   const sourceDuration = end - start;
-  const outputDuration = narrated
-    ? sourceDuration
-    : Math.max(Math.min(sourceDuration, minimumGapSeconds), sourceDuration / silenceSpeed);
+  const speed = narrated ? 1 : Math.max(1, Math.min(silenceSpeed, Math.floor(sourceDuration / minimumGapSeconds)));
   segments.push({
     start,
     end,
     narrated,
-    speed: sourceDuration / outputDuration,
-    outputDuration,
+    speed,
+    outputDuration: sourceDuration / speed,
   });
 }
 
@@ -126,8 +133,8 @@ filterLines.push(`[0:a]asplit=${segments.length}${segments.map((_, i) => `[as${i
 segments.forEach((segment, index) => {
   const start = segment.start.toFixed(6);
   const end = segment.end.toFixed(6);
-  const speed = segment.speed.toFixed(8);
-  filterLines.push(`[vs${index}]trim=start=${start}:end=${end},setpts=(PTS-STARTPTS)/${speed}[v${index}]`);
+  const speed = segment.speed;
+  filterLines.push(`[vs${index}]trim=start=${start}:end=${end},setpts=(PTS-STARTPTS)/${speed},fps=${frameRate}[v${index}]`);
   filterLines.push(`[as${index}]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,atempo=${speed}[a${index}]`);
 });
 filterLines.push(

@@ -1,18 +1,21 @@
 // Final artifact QA. Verifies stream shape/duration and rejects long blank/loading
-// intervals that selector checks and narration drift cannot detect.
+// intervals and single-frame flashes that selector checks and narration drift cannot
+// detect. Frames that jump away and return within twelve frames are reported as
+// warnings, or as errors with --strict.
 //
-// Usage: node ~/.demo_video/scripts/verify-video.mjs demo/output/<name>.mp4
+// Usage: node ~/.demo_video/scripts/verify-video.mjs demo/output/<name>.mp4 [--strict]
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import ffprobeStatic from 'ffprobe-static';
 import { demoVideoHome, projectCacheDir } from './lib/npm-env.mjs';
-import { findBlankSegments, formatTimestamp } from './lib/video-quality.mjs';
+import { findBlankSegments, findFlashFrames, formatTimestamp } from './lib/video-quality.mjs';
 
 const videoPath = process.argv[2];
+const strict = process.argv.includes('--strict');
 if (!videoPath || !fs.existsSync(videoPath)) {
-  console.error('Usage: node verify-video.mjs demo/output/<name>.mp4');
+  console.error('Usage: node verify-video.mjs demo/output/<name>.mp4 [--strict]');
   process.exit(1);
 }
 
@@ -43,6 +46,12 @@ if (blankSegments.length) {
   );
 }
 
+const { flashes, glitches } = findFlashFrames(videoPath);
+const times = (list) => list.map((ms) => formatTimestamp(ms)).join(', ');
+if (flashes.length) errors.push(`single-frame flashes: ${times(flashes)}`);
+if (glitches.length && strict) errors.push(`frames that jump away and return: ${times(glitches)}`);
+else if (glitches.length) console.warn(`⚠ frames that jump away and return (review them): ${times(glitches)}`);
+
 console.log(JSON.stringify({
   file: path.resolve(videoPath),
   bytes: Number(probe.format.size),
@@ -50,10 +59,12 @@ console.log(JSON.stringify({
   video: { codec: video?.codec_name, width: video?.width, height: video?.height, durationSeconds: Number(video?.duration) },
   audio: { codec: audio?.codec_name, sampleRate: audio?.sample_rate, channels: audio?.channels, durationSeconds: Number(audio?.duration) },
   blankSegments,
+  flashFramesMs: flashes,
+  returningJumpsMs: glitches,
 }, null, 2));
 
 if (errors.length) {
   for (const error of errors) console.error(`✘ ${error}`);
   process.exit(1);
 }
-console.log('✔ stream and blank/loading QA passed');
+console.log('✔ stream, blank/loading, and flash QA passed');

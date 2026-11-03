@@ -1,6 +1,6 @@
 # Demo Video v1.6.0 - Release Notes
 
-**Released:** October 2026 · **Status:** Stable · **Platform:** Windows, Linux and macOS · **Agents:** Claude Code, Codex, Cursor and other Agent Skills hosts
+**Released:** November 2026 · **Status:** Stable · **Platform:** Windows, Linux and macOS · **Agents:** Claude Code, Codex, Cursor and other Agent Skills hosts
 
 ---
 

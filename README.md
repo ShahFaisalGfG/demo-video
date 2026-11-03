@@ -39,7 +39,7 @@ Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that tur
   - [Versioning \& Releases](#versioning--releases)
   - [Contributing](#contributing)
   - [Changelog](#changelog)
-    - [v1.6.0 - October 2026 *(current)*](#v160---october-2026-current)
+    - [v1.6.0 - November 2026 *(current)*](#v160---november-2026-current)
     - [v1.5.0 - October 2026](#v150---october-2026)
   - [License \& Credits](#license--credits)
   - [Support the Project](#support-the-project)
@@ -261,7 +261,7 @@ Keep credentials, client recordings, and generated media out of commits. For sig
 
 ## Changelog
 
-### v1.6.0 - October 2026 *(current)*
+### v1.6.0 - November 2026 *(current)*
 - 🗣️ **Kokoro narration by default** with the full-precision model and the `am_michael` voice; Piper is the second engine
 - 🖱️ **Human cursor motion** in browser and desktop recordings, with no cursor move limit in the browser
 - 👂 **Narration verification** with speech recognition, caption offsets, and heteronym phonemes

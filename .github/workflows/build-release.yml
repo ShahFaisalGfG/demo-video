@@ -68,16 +68,25 @@ jobs:
       - name: Package the skill
         run: python scripts/package-skill.py . dist
 
-      - name: Create GitHub Release
+      # A re-run, or a tag pushed again, replaces the files of a release that already exists
+      # instead of failing; the packaged zip is deterministic, so the same source gives the same files.
+      - name: Create or update GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           VER: ${{ needs.version.outputs.ver }}
         run: |
-          gh release create "$TAG" \
-            --title "Demo Video v$VER" \
-            --notes-file "release_notes/release_notes_v$VER.md" \
-            "dist/demo-video_${VER}_skill.zip" \
-            "dist/demo-video_${VER}_skill.zip.sha256" \
+          files=(
+            "dist/demo-video_${VER}_skill.zip"
+            "dist/demo-video_${VER}_skill.zip.sha256"
             "dist/release-manifest.json"
+          )
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" \
+              --title "Demo Video v$VER" \
+              --notes-file "release_notes/release_notes_v$VER.md" \
+              "${files[@]}"
+          fi

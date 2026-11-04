@@ -242,7 +242,7 @@ To release a version:
    git push origin v1.5.0
    ```
 
-The [Build and Release](.github/workflows/build-release.yml) workflow checks that the tag matches `VERSION` and that the release notes exist, runs the full CI suite, packages the skill, and publishes the GitHub release.
+The [Build and Release](.github/workflows/build-release.yml) workflow checks that the tag matches `VERSION` and that the release notes exist, runs the full CI suite, packages the skill, and publishes the GitHub release. Re-running it, or pushing the tag again, replaces the files of the existing release.
 
 ---
 

@@ -13,11 +13,16 @@
 // not via the copy it creates at ~/.demo_video/scripts/bootstrap.mjs - this
 // file locates its sibling scripts relative to its own path specifically so
 // it can sync them forward; running the copy would just sync it to itself.
+//
+// Once a day it also checks for a newer signed release and prints one line
+// naming the update command when there is one. Network failures stay silent,
+// and DEMO_VIDEO_NO_UPDATE_CHECK=1 skips the check.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { demoVideoHome, ensureIsolatedDeps } from './lib/npm-env.mjs';
+import { checkForUpdate, readSkillVersion } from './lib/update-check.mjs';
 
 const home = demoVideoHome();
 const scriptsDir = path.join(home, 'scripts');
@@ -35,5 +40,19 @@ if (path.resolve(sourceScriptsDir) === path.resolve(scriptsDir)) {
 }
 
 ensureIsolatedDeps();
+
+let skillVersion = null;
+try {
+  skillVersion = readSkillVersion(path.dirname(sourceScriptsDir));
+} catch {
+  // The synced copy under ~/.demo_video has no VERSION file, so it has nothing to compare.
+}
+if (skillVersion) {
+  const update = await checkForUpdate(skillVersion);
+  if (update.status === 'update-available') {
+    console.log(`[bootstrap] demo-video ${update.latest} is available (installed: ${update.current}). `
+      + `To update, run: node "${path.join(sourceScriptsDir, 'update-skill.mjs')}"`);
+  }
+}
 
 console.log(`[bootstrap] ready: ${home}`);

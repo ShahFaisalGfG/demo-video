@@ -38,7 +38,10 @@ def main() -> None:
     checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     manifest = {"name": "demo-video", "version": version, "archive": archive.name,
                 "sha256": digest, "files": len(files)}
-    (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_path = output / "release-manifest.json"
+    # A signature from an earlier run would no longer match; sign_update.py writes the new one.
+    manifest_path.with_name(manifest_path.name + ".sig").unlink(missing_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(manifest))
 
 

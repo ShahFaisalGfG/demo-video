@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -11,6 +13,8 @@ import { editTimeline, retimeCues } from './lib/edit-timeline.mjs';
 import { cachedNarration } from './lib/narration-cache.mjs';
 import { synthesize, disposeSynthesizer } from './lib/synthesize.mjs';
 import { systemPython } from './lib/python-venv.mjs';
+import { checkForUpdate, compareVersions, verifySignature } from './lib/update-check.mjs';
+import { updateSkill } from './update-skill.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-release-test-'));
 const scripts = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +36,161 @@ function duration(file) {
 function streamHash(file, kind) {
   return execFileSync(ffmpeg, ['-v', 'error', '-i', file, '-map', `0:${kind}:0`, '-c', 'copy',
     '-f', 'hash', '-hash', 'sha256', '-'], { encoding: 'utf8' }).trim();
+}
+
+/**
+ * Check signed updates against a local release server: an ephemeral key stands in for the release
+ * key and a disposable home folder for the user's, so nothing reaches the network or real installs.
+ */
+async function testSignedUpdates(workspace) {
+  const keyPair = () => crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1',
+    publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+  const signer = keyPair();
+  const stranger = keyPair();
+  const sign = (data, key = signer.privateKey) =>
+    `${crypto.sign('sha256', data, { key, dsaEncoding: 'ieee-p1363' }).toString('base64')}\n`;
+
+  const sample = Buffer.from('{"name":"demo-video"}\n');
+  assert.ok(verifySignature(sample, sign(sample), [signer.publicKey]));
+  assert.ok(verifySignature(sample, sign(sample), [stranger.publicKey, signer.publicKey]), 'a rotated key list');
+  assert.ok(!verifySignature(Buffer.from('{"name":"demo-videO"}\n'), sign(sample), [signer.publicKey]), 'tampered data');
+  assert.ok(!verifySignature(sample, sign(sample), [stranger.publicKey]), 'wrong key');
+  assert.ok(!verifySignature(sample, sign(sample, stranger.privateKey), [signer.publicKey]), 'signed by another key');
+  assert.ok(!verifySignature(sample, 'bm90IGEgc2lnbmF0dXJl\n', [signer.publicKey]), 'short signature');
+  assert.ok(!verifySignature(sample, sign(sample), []), 'no trusted keys');
+
+  assert.ok(compareVersions('1.10.0', '1.9.9') > 0);
+  assert.ok(compareVersions('2.0.0', '1.99.99') > 0);
+  assert.ok(compareVersions('1.7.0', '1.7.1') < 0);
+  assert.equal(compareVersions('1.7.0', '1.7.0'), 0);
+  for (const invalid of ['1.7', 'v1.7.0', '1.7.0-beta', '']) assert.throws(() => compareVersions(invalid, '1.7.0'), /X\.Y\.Z/);
+
+  const updateRoot = path.join(workspace, 'update');
+  const stage = path.join(updateRoot, 'stage', 'demo-video');
+  fs.cpSync(scripts, path.join(stage, 'scripts'), { recursive: true, filter: (source) => path.basename(source) !== '__pycache__' });
+  fs.writeFileSync(path.join(stage, 'SKILL.md'), '---\nname: demo-video\n---\n');
+  fs.writeFileSync(path.join(stage, 'VERSION'), '9.0.0\n');
+  const releaseDir = path.join(updateRoot, 'release');
+  execFileSync(systemPython('the update test'), ['-I', path.join(scripts, 'package-skill.py'), stage, releaseDir], { stdio: 'ignore' });
+  const manifestBytes = fs.readFileSync(path.join(releaseDir, 'release-manifest.json'));
+  const manifest = JSON.parse(manifestBytes);
+  const assets = new Map();
+  const publish = (data, signature = sign(data)) => {
+    assets.set('release-manifest.json', data);
+    assets.set('release-manifest.json.sig', Buffer.from(signature));
+  };
+  assets.set(manifest.archive, fs.readFileSync(path.join(releaseDir, manifest.archive)));
+  publish(manifestBytes);
+
+  // Mirrors GitHub: the latest-release link redirects to the tagged download.
+  const served = [];
+  const server = http.createServer((request, response) => {
+    served.push(request.url);
+    const latest = /^\/releases\/latest\/download\/([^/]+)$/.exec(request.url);
+    if (latest) {
+      response.writeHead(302, { Location: `/releases/download/v${manifest.version}/${latest[1]}` });
+      response.end();
+      return;
+    }
+    const tagged = new RegExp(`^/releases/download/v${manifest.version}/([^/]+)$`).exec(request.url);
+    const body = tagged && assets.get(tagged[1]);
+    response.writeHead(body ? 200 : 404);
+    response.end(body);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const releasesUrl = `http://127.0.0.1:${server.address().port}/releases`;
+
+  const home = path.join(updateRoot, 'home');
+  const savedEnv = Object.fromEntries(['HOME', 'USERPROFILE', 'CODEX_HOME', 'DEMO_VIDEO_NO_UPDATE_CHECK']
+    .map((name) => [name, process.env[name]]));
+  Object.assign(process.env, { HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex') });
+  delete process.env.DEMO_VIDEO_NO_UPDATE_CHECK;
+  try {
+    const cacheFile = path.join(updateRoot, 'update-check.json');
+    const options = { releasesUrl, publicKeys: [signer.publicKey], cacheFile };
+    const offered = await checkForUpdate('1.7.0', options);
+    assert.deepEqual([offered.status, offered.latest], ['update-available', '9.0.0']);
+    let requests = served.length;
+    assert.equal((await checkForUpdate('1.7.0', options)).status, 'update-available');
+    assert.equal(served.length, requests, 'a fresh saved check is reused without a request');
+    assert.equal((await checkForUpdate('9.0.0', options)).status, 'up-to-date');
+    assert.ok(served.length > requests, 'another installed version checks again');
+    requests = served.length;
+    const dayOld = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(cacheFile, dayOld, dayOld);
+    await checkForUpdate('9.0.0', options);
+    assert.ok(served.length > requests, 'a saved check older than a day is repeated');
+    requests = served.length;
+    const momentAhead = (Date.now() + 500) / 1000;
+    fs.utimesSync(cacheFile, momentAhead, momentAhead);
+    await checkForUpdate('9.0.0', options);
+    assert.equal(served.length, requests, 'a file time a moment ahead of the clock still counts');
+    const hourAhead = (Date.now() + 60 * 60 * 1000) / 1000;
+    fs.utimesSync(cacheFile, hourAhead, hourAhead);
+    await checkForUpdate('9.0.0', options);
+    assert.ok(served.length > requests, 'a file time far ahead of the clock is checked again');
+
+    fs.rmSync(cacheFile);
+    publish(Buffer.from(manifestBytes.toString().replace('"9.0.0"', '"9.0.1"')), sign(manifestBytes));
+    assert.equal((await checkForUpdate('1.7.0', options)).status, 'unverified', 'a tampered manifest is not offered');
+    fs.rmSync(cacheFile);
+    publish(manifestBytes, sign(manifestBytes, stranger.privateKey));
+    assert.equal((await checkForUpdate('1.7.0', options)).status, 'unverified', 'a manifest signed by another key');
+    fs.rmSync(cacheFile);
+    assert.equal((await checkForUpdate('1.7.0', { ...options, releasesUrl: `${releasesUrl}/missing` })).status, 'failed');
+    requests = served.length;
+    assert.equal((await checkForUpdate('1.7.0', { ...options, publicKeys: [] })).status, 'not-configured');
+    process.env.DEMO_VIDEO_NO_UPDATE_CHECK = '1';
+    assert.equal((await checkForUpdate('1.7.0', options)).status, 'disabled');
+    delete process.env.DEMO_VIDEO_NO_UPDATE_CHECK;
+    assert.equal(served.length, requests, 'an unconfigured or disabled check makes no request');
+
+    const claudeRoot = path.join(home, '.claude', 'skills');
+    const outdated = path.join(claudeRoot, 'demo-video');
+    fs.mkdirSync(outdated, { recursive: true });
+    fs.writeFileSync(path.join(outdated, 'VERSION'), '1.7.0\n');
+    fs.writeFileSync(path.join(outdated, 'previous-only.txt'), 'previous copy');
+    for (const stamp of ['2020-01-01T00-00-00-000Z', '2021-01-01T00-00-00-000Z']) {
+      fs.mkdirSync(path.join(claudeRoot, `demo-video.backup-${stamp}`));
+    }
+    const current = path.join(home, '.agents', 'skills', 'demo-video');
+    fs.mkdirSync(current, { recursive: true });
+    fs.writeFileSync(path.join(current, 'VERSION'), '9.0.0\n');
+    const unversioned = path.join(home, '.codex', 'skills', 'demo-video');
+    fs.mkdirSync(unversioned, { recursive: true });
+    const updateOptions = { releasesUrl, publicKeys: [signer.publicKey] };
+
+    const wrongChecksum = Buffer.from(manifestBytes.toString().replace(manifest.sha256, '0'.repeat(64)));
+    publish(wrongChecksum);
+    await assert.rejects(updateSkill(updateOptions), /failed its checksum/);
+    publish(manifestBytes, sign(manifestBytes, stranger.privateKey));
+    await assert.rejects(updateSkill(updateOptions), /valid signature/);
+    assert.equal(fs.readFileSync(path.join(outdated, 'VERSION'), 'utf8').trim(), '1.7.0', 'a refused update changes nothing');
+
+    publish(manifestBytes);
+    const result = await updateSkill(updateOptions);
+    assert.deepEqual(result.updated.map((copy) => copy.host), ['claude']);
+    assert.equal(fs.readFileSync(path.join(outdated, 'VERSION'), 'utf8').trim(), '9.0.0');
+    assert.ok(!fs.existsSync(path.join(outdated, 'previous-only.txt')));
+    const backups = fs.readdirSync(claudeRoot).filter((name) => name.startsWith('demo-video.backup-'));
+    assert.equal(backups.length, 1, 'each host keeps only its newest backup');
+    assert.ok(fs.existsSync(path.join(claudeRoot, backups[0], 'previous-only.txt')));
+    assert.deepEqual(fs.readdirSync(path.dirname(current)), ['demo-video'], 'a current copy is left alone');
+    assert.deepEqual(fs.readdirSync(unversioned), [], 'a folder without VERSION is not an installed copy');
+    assert.ok(!fs.existsSync(path.join(home, '.cursor')), 'hosts without a copy get none');
+    const saved = JSON.parse(fs.readFileSync(path.join(home, '.demo_video', 'update-check.json'), 'utf8'));
+    assert.deepEqual([saved.status, saved.current], ['up-to-date', '9.0.0']);
+
+    requests = served.length;
+    assert.deepEqual((await updateSkill(updateOptions)).updated, []);
+    assert.ok(!served.slice(requests).some((url) => url.endsWith('.zip')), 'an up-to-date skill downloads no archive');
+  } finally {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 try {
@@ -110,6 +269,8 @@ try {
     'sys.exit(0 if ok and runner.move_duration(60) < total else 1)',
   ].join('\n')], { stdio: 'inherit' });
 
+  await testSignedUpdates(root);
+
   const engine = ['kokoro', 'piper'].find((name) => process.argv.includes(`--with-${name}`)) ?? 'tiny-tts';
   const config = { engine, speed: 1 };
   const clip = path.join(root, 'speech.wav');
@@ -154,8 +315,8 @@ try {
   fs.writeFileSync(definition, JSON.stringify(settings));
   assert.throws(() => runScript('generate-narration.mjs', definition), /spokenNarration needs/);
   console.log(`[release-test] passed with ${engine}: paired delivery, ASS, cuts, speed, stream copy, audio replacement, `
-    + 'whole-number silence compaction, flash detection, desktop paths, narration cache, engine fallback rules, '
-    + 'offline reuse, spoken narration rules, and stale audio rejection.');
+    + 'whole-number silence compaction, flash detection, desktop paths, signed update checks, skill updates, '
+    + 'narration cache, engine fallback rules, offline reuse, spoken narration rules, and stale audio rejection.');
 } finally {
   await disposeSynthesizer();
   if (process.argv.includes('--keep-artifacts')) console.log(`[release-test] artifacts: ${root}`);

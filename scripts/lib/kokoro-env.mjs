@@ -8,11 +8,9 @@
 // project. The full-precision model is the default because it gives the
 // cleanest voice; fp16 and int8 trade a little quality for size and speed.
 
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { downloadVerified } from './download.mjs';
 import { demoVideoHome } from './npm-env.mjs';
 import { ensureVenv } from './python-venv.mjs';
 
@@ -74,36 +72,9 @@ export function kokoroModelsPresent(cfg = {}) {
 async function download(asset, directory) {
   const target = path.join(directory, asset.file);
   if (fs.existsSync(target) && fs.statSync(target).size === asset.bytes) return target;
-  fs.mkdirSync(directory, { recursive: true });
-  const partial = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.partial`;
   console.log(`[kokoro] downloading ${asset.file} (${Math.round(asset.bytes / 1e6)} MB, one time) ...`);
-  const controller = new AbortController();
-  let idle = setTimeout(() => controller.abort(), DOWNLOAD_IDLE_MS);
-  const hash = crypto.createHash('sha256');
-  try {
-    const response = await fetch(`${RELEASE}/${asset.file}`, { signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error(`Kokoro download failed: HTTP ${response.status} for ${asset.file}.`);
-    await pipeline(Readable.fromWeb(response.body), async function* digest(chunks) {
-      for await (const chunk of chunks) {
-        clearTimeout(idle);
-        idle = setTimeout(() => controller.abort(), DOWNLOAD_IDLE_MS);
-        hash.update(chunk);
-        yield chunk;
-      }
-    }, fs.createWriteStream(partial));
-    const digest = hash.digest('hex');
-    if (digest !== asset.sha256) throw new Error(`${asset.file} failed its checksum (${digest}).`);
-    fs.renameSync(partial, target);
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error(`Kokoro download of ${asset.file} stalled for ${DOWNLOAD_IDLE_MS / 1000} seconds.`, { cause: error });
-    }
-    throw error;
-  } finally {
-    clearTimeout(idle);
-    fs.rmSync(partial, { force: true });
-  }
-  return target;
+  return downloadVerified(`${RELEASE}/${asset.file}`, target,
+    { sha256: asset.sha256, idleMs: DOWNLOAD_IDLE_MS, label: `Kokoro download of ${asset.file}` });
 }
 
 function explicitIdentity(file) {

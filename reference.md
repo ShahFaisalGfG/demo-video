@@ -22,6 +22,7 @@ Nothing this skill needs - npm packages, the Chromium browser, the Python venv, 
 ├── .demovideo_ocr_venv/ - isolated OCR and perceptual-image environment
 ├── .demovideo_desktop_venv/ - isolated PyAutoGUI, OpenCV, and NumPy environment for desktop input and deglitching
 ├── scripts/ - this skill's pipeline scripts, kept in sync by bootstrap.mjs
+├── update-check.json - the result of the last daily update check, which doctor.mjs reports
 └── cache/<project-hash>/<flow>/ - per-run intermediates (audio clips, resolved definitions, raw video before muxing)
 ```
 
@@ -29,6 +30,7 @@ Nothing this skill needs - npm packages, the Chromium browser, the Python venv, 
 - Always re-copies `scripts/` into `~/.demo_video/scripts/`, so a skill update is picked up on the very next run without any manual cache-clearing.
 - Only runs `npm install` if a required package is missing from `~/.demo_video/node_modules/` - cheap existence checks, not a version audit.
 - Only runs `npx playwright install chromium` if no `chromium-*` folder exists yet under `~/.demo_video/browsers/`.
+- At most once a day, downloads the latest `release-manifest.json` and its signature with a 5-second limit, and prints one line naming `scripts/update-skill.mjs` when a newer release verifies under a key in `scripts/lib/update-check.mjs`. It installs nothing; the agent runs the update only after the user agrees. Network failures stay silent, and `DEMO_VIDEO_NO_UPDATE_CHECK=1` skips the check.
 
 **Browser discovery:** the bundled compiler sets `PLAYWRIGHT_BROWSERS_PATH` before dynamically importing browser modules. Custom scripts should set it before importing Playwright or testreel; changing it after import is too late.
 

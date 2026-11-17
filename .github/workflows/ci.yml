@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+# CI tests this commit, so bootstrap must not contact the published releases for an update check.
+env:
+  DEMO_VIDEO_NO_UPDATE_CHECK: '1'
+
 jobs:
   cross-platform:
     strategy:

@@ -6,6 +6,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { browsersDir, demoVideoHome } from './lib/npm-env.mjs';
 import { kokoroModelsPresent, kokoroVenvDir } from './lib/kokoro-env.mjs';
 import { venvBin, venvReady } from './lib/python-venv.mjs';
+import { updateCheckSummary } from './lib/update-check.mjs';
 
 function command(name, args = ['--version']) {
   try {
@@ -59,6 +60,8 @@ try {
 } catch {
   add('Free cache space', true, 'recommended', 'not measured');
 }
+const update = updateCheckSummary();
+add('Up to date', update.passed, 'recommended', update.detail);
 
 const failedRequired = checks.filter((check) => check.level === 'required' && !check.passed);
 if (process.argv.includes('--json')) {

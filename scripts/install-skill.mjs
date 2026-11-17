@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { skillHostRoots } from './lib/skill-hosts.mjs';
 
 const skillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hostIndex = process.argv.indexOf('--host');
@@ -9,12 +9,7 @@ const destinationIndex = process.argv.indexOf('--destination');
 const host = hostIndex >= 0 ? process.argv[hostIndex + 1] : 'all';
 const explicitDestination = destinationIndex >= 0 ? process.argv[destinationIndex + 1] : null;
 const force = process.argv.includes('--force');
-const roots = {
-  codex: path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex'), 'skills'),
-  claude: path.join(os.homedir(), '.claude', 'skills'),
-  cursor: path.join(os.homedir(), '.cursor', 'skills'),
-  agents: path.join(os.homedir(), '.agents', 'skills'),
-};
+const roots = skillHostRoots();
 const hosts = host === 'all' ? Object.keys(roots) : [host];
 if (hosts.some((name) => !(name in roots))) throw new Error(`Unknown host ${host}. Use codex, claude, cursor, agents, or all.`);
 

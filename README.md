@@ -30,6 +30,7 @@ Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that tur
   - [Download \& Install](#download--install)
     - [Supported agents](#supported-agents)
     - [Requirements](#requirements)
+    - [Updates](#updates)
   - [Quick Start](#quick-start)
   - [Platform Coverage](#platform-coverage)
   - [Application Coverage](#application-coverage)
@@ -37,9 +38,12 @@ Demo Video is a **free, open-source**, portable [Agent Skill](SKILL.md) that tur
   - [Security](#security)
   - [Development \& Tests](#development--tests)
   - [Versioning \& Releases](#versioning--releases)
+    - [Update signing key](#update-signing-key)
+    - [Publishing a release](#publishing-a-release)
   - [Contributing](#contributing)
   - [Changelog](#changelog)
-    - [v1.6.0 - November 2026 *(current)*](#v160---november-2026-current)
+    - [v1.6.1 - November 2026 *(current)*](#v161---november-2026-current)
+    - [v1.6.0 - November 2026](#v160---november-2026)
     - [v1.5.0 - October 2026](#v150---october-2026)
   - [License \& Credits](#license--credits)
   - [Support the Project](#support-the-project)
@@ -116,9 +120,21 @@ The skill follows the Agent Skills `SKILL.md` format:
 ### Requirements
 
 - Node.js 20 or newer
-- Python 3.10 or newer for Kokoro, Piper, subtitle alignment, narration verification, OCR, or desktop automation
+- Python 3.10 or newer for Kokoro, Piper, subtitle alignment, narration verification, OCR, desktop automation, or updates
 - Internet access for the first model and browser download
 - At least 4 GB of free cache space for models and caches; more when using local VLMs
+
+### Updates
+
+`bootstrap.mjs` checks once a day for a newer release and prints one line when there is one, naming the update command. Your agent passes that line on and updates only when you agree; the skill never updates itself. To update yourself:
+
+```bash
+node <installed-skill>/scripts/update-skill.mjs
+```
+
+The update downloads `release-manifest.json` and accepts it only when its signature matches a release public key built into the skill. It then checks the archive against the manifest's SHA-256, unpacks it into a new empty folder, and installs it into every supported skill folder that holds an older copy. Each folder keeps its newest `demo-video.backup-*` copy. Run `bootstrap.mjs` again from the updated skill afterward.
+
+The check result is kept in `~/.demo_video/update-check.json`, and `doctor.mjs` reports it. A failed check stays silent and never stops bootstrap. Set `DEMO_VIDEO_NO_UPDATE_CHECK=1` to turn the check off.
 
 ---
 
@@ -190,7 +206,7 @@ No remote semantic endpoint is contacted unless `quality.semanticEvidence` is co
 - Use dedicated test accounts and non-production data.
 - Use local semantic endpoints for confidential screens.
 - Review third-party model licenses before client use.
-- Check release checksums before distribution.
+- Check release checksums before distribution. `update-skill.mjs` installs a release only after its signed manifest and archive checksum match.
 
 See [SECURITY.md](SECURITY.md) for reporting a vulnerability.
 
@@ -209,27 +225,47 @@ python scripts/desktop-runner.py tests/desktop-smoke.recording.json --validate
 
 Add `--with-kokoro` or `--with-piper` to the release test to run its narration checks with that engine instead of TinyTTS.
 
-`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder with the human cursor, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery, whole-number silence compaction, flash detection, desktop path planning, engine fallback rules, and narration revisions.
+`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder with the human cursor, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery, whole-number silence compaction, flash detection, desktop path planning, signed update checks and a full update from a local release server, engine fallback rules, and narration revisions.
 
-[CI](.github/workflows/ci.yml) runs these checks on Windows, Linux, and macOS for every push and pull request, plus the OCR evidence test on Windows.
+[CI](.github/workflows/ci.yml) runs these checks on Windows, Linux, and macOS for every push and pull request, plus the OCR evidence test on Windows. CI sets `DEMO_VIDEO_NO_UPDATE_CHECK=1`, so bootstrap never contacts the published releases there.
 
 ---
 
 ## Versioning & Releases
 
-Demo Video follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. The version lives in one place, the [VERSION](VERSION) file. Releases are tagged `v<version>` and published as **Demo Video v\<version\>** with three files:
+Demo Video follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. The version lives in one place, the [VERSION](VERSION) file. Releases are tagged `v<version>` and published as **Demo Video v\<version\>** with four files:
 
 | File | Contents |
 | --- | --- |
 | `demo-video_<version>_skill.zip` | The skill in one `demo-video` folder, with fixed timestamps so the same source always gives the same zip |
 | `demo-video_<version>_skill.zip.sha256` | The zip's SHA-256 checksum |
 | `release-manifest.json` | Name, version, archive name, checksum, and file count |
+| `release-manifest.json.sig` | ECDSA P-256 signature of the manifest, which installed copies check before offering an update |
 
-Build the same files locally with:
+Build the zip, checksum, and manifest locally with:
 
 ```bash
 python scripts/package-skill.py . ./dist
 ```
+
+### Update signing key
+
+Every release manifest is signed with one ECDSA P-256 key that belongs to this repository. The private key lives in Doppler (project `demo-video`, config `prd`, secret `UPDATE_SIGNING_KEY`) and is copied from there to the repository's `UPDATE_SIGNING_KEY` Actions secret; its public half is in `UPDATE_PUBLIC_KEYS` in [scripts/lib/update-check.mjs](scripts/lib/update-check.mjs). Run these in WSL, where the Doppler and GitHub CLIs are signed in:
+
+```bash
+# Copy the key from Doppler to GitHub again (after replacing it, say)
+doppler secrets get UPDATE_SIGNING_KEY -p demo-video -c prd --plain | gh secret set UPDATE_SIGNING_KEY --repo ShahFaisalGfG/demo-video
+# Print the public half, the form `UPDATE_PUBLIC_KEYS` in [scripts/lib/update-check.mjs](scripts/lib/update-check.mjs) holds
+doppler secrets get UPDATE_SIGNING_KEY -p demo-video -c prd --plain | openssl ec -pubout
+# Sign a local build with it
+doppler run -p demo-video -c prd -- python3 scripts/sign_update.py dist/release-manifest.json --expect scripts/lib/update-check.mjs
+```
+
+To replace the key, store a new one in Doppler, release one version signed with the old key whose list holds both public keys, then copy the new key to GitHub. If the key were lost, installed copies could no longer verify updates. Doppler keeps it, with its version history; never commit it or leave a copy in a file.
+
+`scripts/sign_update.py` signs a file the same way the gfgRoyal desktop apps sign theirs, and needs the `cryptography` package. `--expect` stops it when the key's public half is not in the named source file.
+
+### Publishing a release
 
 To release a version:
 
@@ -242,7 +278,7 @@ To release a version:
    git push origin v1.5.0
    ```
 
-The [Build and Release](.github/workflows/build-release.yml) workflow checks that the tag matches `VERSION` and that the release notes exist, runs the full CI suite, packages the skill, and publishes the GitHub release. Re-running it, or pushing the tag again, replaces the files of the existing release.
+The [Build and Release](.github/workflows/build-release.yml) workflow checks that the tag matches `VERSION` and that the release notes exist, runs the full CI suite, packages the skill, signs the manifest, and publishes the GitHub release. It stops before publishing when the `UPDATE_SIGNING_KEY` secret is missing, or when no key in `UPDATE_PUBLIC_KEYS` verifies the new signature. Re-running it, or pushing the tag again, replaces the files of the existing release.
 
 ---
 
@@ -261,7 +297,13 @@ Keep credentials, client recordings, and generated media out of commits. For sig
 
 ## Changelog
 
-### v1.6.0 - November 2026 *(current)*
+### v1.6.1 - November 2026 *(current)*
+- 🔔 **Update notices** - bootstrap checks once a day for a newer release and prints one line naming the update command
+- 🔏 **Signed updates** - `update-skill.mjs` installs a release only when its manifest signature and archive checksum match, after you agree
+- 🗂️ **Every installed copy updated** across Claude Code, Codex, Cursor, and the shared skill folder, keeping the newest backup of each
+- 🩺 **Update status** in `doctor.mjs`, and `DEMO_VIDEO_NO_UPDATE_CHECK=1` to turn the check off
+
+### v1.6.0 - November 2026
 - 🗣️ **Kokoro narration by default** with the full-precision model and the `am_michael` voice; Piper is the second engine
 - 🖱️ **Human cursor motion** in browser and desktop recordings, with no cursor move limit in the browser
 - 👂 **Narration verification** with speech recognition, caption offsets, and heteronym phonemes

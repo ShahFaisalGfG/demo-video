@@ -64,9 +64,45 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
       # Deterministic zip with one top-level demo-video folder, its SHA-256 file, and a manifest.
       - name: Package the skill
         run: python scripts/package-skill.py . dist
+
+      # Installed copies offer an update only when this signature verifies. sign_update.py fails
+      # when the UPDATE_SIGNING_KEY secret is missing, so a release is never published unsigned, and
+      # --expect stops it when the key's public half is not in UPDATE_PUBLIC_KEYS.
+      - name: Sign the release manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          python -m pip install --disable-pip-version-check cryptography==50.0.2
+          python scripts/sign_update.py dist/release-manifest.json --expect scripts/lib/update-check.mjs
+
+      # The skill's own verifier, with the keys it ships, must accept the new signature and manifest,
+      # or the copies installed from this release could not verify the next one.
+      - name: Check the signature with the shipped public keys
+        shell: bash
+        run: |
+          node --input-type=module <<'EOF'
+          import fs from 'node:fs';
+          import { UPDATE_PUBLIC_KEYS, UpdateSignatureError, verifiedManifest } from './scripts/lib/update-check.mjs';
+          const data = fs.readFileSync('dist/release-manifest.json');
+          const signature = fs.readFileSync('dist/release-manifest.json.sig', 'utf8');
+          try {
+            const manifest = verifiedManifest(data, signature, UPDATE_PUBLIC_KEYS);
+            console.log(`release-manifest.json for ${manifest.version} verifies with a shipped key.`);
+          } catch (error) {
+            const hint = error instanceof UpdateSignatureError
+              ? ' Add the public key of UPDATE_SIGNING_KEY to UPDATE_PUBLIC_KEYS in scripts/lib/update-check.mjs.' : '';
+            console.log(`::error::${error.message}.${hint}`);
+            process.exit(1);
+          }
+          EOF
 
       # A re-run, or a tag pushed again, replaces the files of a release that already exists
       # instead of failing; the packaged zip is deterministic, so the same source gives the same files.
@@ -81,6 +117,7 @@ jobs:
             "dist/demo-video_${VER}_skill.zip"
             "dist/demo-video_${VER}_skill.zip.sha256"
             "dist/release-manifest.json"
+            "dist/release-manifest.json.sig"
           )
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber

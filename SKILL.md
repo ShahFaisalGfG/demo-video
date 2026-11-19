@@ -34,7 +34,7 @@ node ~/.demo_video/scripts/doctor.mjs
 
 Do not install recorder, browser, speech, OCR, or FFmpeg dependencies into the target project.
 
-Bootstrap checks once a day for a newer signed release of this skill. When it prints `[bootstrap] demo-video <version> is available`, pass that line on to the user and ask whether to update. Run the update command it names (`node <skill-dir>/scripts/update-skill.mjs`) only after the user agrees, and only before work starts or after delivery, never while a recording or render is running, because it replaces the skill folders. The command verifies the release signature and archive checksum, updates every installed copy, and keeps the previous copy as a backup. Run bootstrap again from the updated skill afterward. If the user declines, continue with the installed version.
+Bootstrap checks once a day for a newer signed release of this skill. When it prints `[bootstrap] demo-video <version> is available`, pass that line on to the user and ask whether to update. Run the update command it names (`node <skill-dir>/scripts/update-skill.mjs`) only after the user agrees, and only before work starts or after delivery, never while a recording or render is running, because it replaces the skill folders. The command verifies the release signature and archive checksum, updates every installed copy, and keeps the previous copy as a backup in `~/.demo_video/backups/<host>/`, outside the skill folders. Run bootstrap again from the updated skill afterward. If the user declines, continue with the installed version.
 
 ## Write the recording definition
 

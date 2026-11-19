@@ -150,9 +150,10 @@ async function testSignedUpdates(workspace) {
     fs.mkdirSync(outdated, { recursive: true });
     fs.writeFileSync(path.join(outdated, 'VERSION'), '1.7.0\n');
     fs.writeFileSync(path.join(outdated, 'previous-only.txt'), 'previous copy');
-    for (const stamp of ['2020-01-01T00-00-00-000Z', '2021-01-01T00-00-00-000Z']) {
-      fs.mkdirSync(path.join(claudeRoot, `demo-video.backup-${stamp}`));
-    }
+    // Up to 1.6.1 a backup stayed beside the installed copy, where hosts load it as a second skill.
+    const backupsRoot = path.join(home, '.demo_video', 'backups');
+    fs.mkdirSync(path.join(claudeRoot, 'demo-video.backup-2020-01-01T00-00-00-000Z'));
+    fs.mkdirSync(path.join(backupsRoot, 'claude', 'demo-video.backup-2021-01-01T00-00-00-000Z'), { recursive: true });
     const current = path.join(home, '.agents', 'skills', 'demo-video');
     fs.mkdirSync(current, { recursive: true });
     fs.writeFileSync(path.join(current, 'VERSION'), '9.0.0\n');
@@ -172,9 +173,10 @@ async function testSignedUpdates(workspace) {
     assert.deepEqual(result.updated.map((copy) => copy.host), ['claude']);
     assert.equal(fs.readFileSync(path.join(outdated, 'VERSION'), 'utf8').trim(), '9.0.0');
     assert.ok(!fs.existsSync(path.join(outdated, 'previous-only.txt')));
-    const backups = fs.readdirSync(claudeRoot).filter((name) => name.startsWith('demo-video.backup-'));
+    assert.deepEqual(fs.readdirSync(claudeRoot), ['demo-video'], 'no backup stays where the host loads skills');
+    const backups = fs.readdirSync(path.join(backupsRoot, 'claude'));
     assert.equal(backups.length, 1, 'each host keeps only its newest backup');
-    assert.ok(fs.existsSync(path.join(claudeRoot, backups[0], 'previous-only.txt')));
+    assert.ok(fs.existsSync(path.join(backupsRoot, 'claude', backups[0], 'previous-only.txt')));
     assert.deepEqual(fs.readdirSync(path.dirname(current)), ['demo-video'], 'a current copy is left alone');
     assert.deepEqual(fs.readdirSync(unversioned), [], 'a folder without VERSION is not an installed copy');
     assert.ok(!fs.existsSync(path.join(home, '.cursor')), 'hosts without a copy get none');
@@ -184,6 +186,29 @@ async function testSignedUpdates(workspace) {
     requests = served.length;
     assert.deepEqual((await updateSkill(updateOptions)).updated, []);
     assert.ok(!served.slice(requests).some((url) => url.endsWith('.zip')), 'an up-to-date skill downloads no archive');
+
+    // Backups of another skill folder go to ~/.demo_video/backups/destination-<hash of its path>.
+    const install = (...args) => execFileSync(process.execPath, [path.join(stage, 'scripts', 'install-skill.mjs'), ...args],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 });
+    const projectSkills = path.join(updateRoot, 'project', '.claude', 'skills');
+    const leftover = path.join(projectSkills, 'demo-video.backup-2020-01-01T00-00-00-000Z');
+    fs.mkdirSync(leftover, { recursive: true });
+    fs.writeFileSync(path.join(leftover, 'SKILL.md'), '---\nname: demo-video\n---\n');
+    install('--destination', projectSkills);
+    assert.deepEqual(fs.readdirSync(projectSkills), ['demo-video'], 'an install moves an earlier backup out');
+    assert.throws(() => install('--destination', projectSkills), /--force/, 'an install keeps a copy without --force');
+    fs.writeFileSync(path.join(projectSkills, 'demo-video', 'previous-only.txt'), 'previous copy');
+    install('--destination', projectSkills, '--force');
+    assert.deepEqual(fs.readdirSync(projectSkills), ['demo-video'], 'a replaced copy leaves the skill folder');
+    const destinations = fs.readdirSync(backupsRoot).filter((name) => name.startsWith('destination-'));
+    assert.equal(destinations.length, 1, 'another skill folder gets one backup folder');
+    const destinationBackups = path.join(backupsRoot, destinations[0]);
+    const kept = fs.readdirSync(destinationBackups).sort();
+    assert.equal(kept.length, 2, 'install-skill.mjs prunes nothing');
+    assert.ok(fs.existsSync(path.join(destinationBackups, kept[0], 'SKILL.md')), 'the earlier backup moves intact');
+    assert.ok(fs.existsSync(path.join(destinationBackups, kept[1], 'previous-only.txt')), 'the replaced copy is kept');
+    install('--destination', claudeRoot, '--force');
+    assert.equal(fs.readdirSync(path.join(backupsRoot, 'claude')).length, 2, 'a host skill folder uses the host backup folder');
   } finally {
     for (const [name, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[name];

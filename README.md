@@ -104,7 +104,7 @@ Install into every supported agent's user skill folder:
 node demo-video/scripts/install-skill.mjs --host all
 ```
 
-Use `--host codex`, `claude`, `cursor`, or `agents` for one target, or `--destination <folder>` for another skill folder. Existing installations are kept unless `--force` is supplied, which moves the previous copy aside as a timestamped backup.
+Use `--host codex`, `claude`, `cursor`, or `agents` for one target, or `--destination <folder>` for another skill folder. Existing installations are kept unless `--force` is supplied, which moves the previous copy to a timestamped `demo-video.backup-*` folder in `~/.demo_video/backups/<host>/` (`backups/destination-<hash>/` for a `--destination` folder). Agents load every skill in their skill folder, so backups stay outside it, and each install moves any backup that version 1.6.1 or earlier left there.
 
 ### Supported agents
 
@@ -132,7 +132,7 @@ The skill follows the Agent Skills `SKILL.md` format:
 node <installed-skill>/scripts/update-skill.mjs
 ```
 
-The update downloads `release-manifest.json` and accepts it only when its signature matches a release public key built into the skill. It then checks the archive against the manifest's SHA-256, unpacks it into a new empty folder, and installs it into every supported skill folder that holds an older copy. Each folder keeps its newest `demo-video.backup-*` copy. Run `bootstrap.mjs` again from the updated skill afterward.
+The update downloads `release-manifest.json` and accepts it only when its signature matches a release public key built into the skill. It then checks the archive against the manifest's SHA-256, unpacks it into a new empty folder, and installs it into every supported skill folder that holds an older copy. Each host keeps only its newest backup in `~/.demo_video/backups/<host>/`. Run `bootstrap.mjs` again from the updated skill afterward.
 
 The check result is kept in `~/.demo_video/update-check.json`, and `doctor.mjs` reports it. A failed check stays silent and never stops bootstrap. Set `DEMO_VIDEO_NO_UPDATE_CHECK=1` to turn the check off.
 
@@ -225,7 +225,7 @@ python scripts/desktop-runner.py tests/desktop-smoke.recording.json --validate
 
 Add `--with-kokoro` or `--with-piper` to the release test to run its narration checks with that engine instead of TinyTTS.
 
-`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder with the human cursor, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery, whole-number silence compaction, flash detection, desktop path planning, signed update checks and a full update from a local release server, engine fallback rules, and narration revisions.
+`bootstrap.mjs` syncs the scripts into `~/.demo_video`, so run it again after every edit before testing. The self-test covers the owned recorder with the human cursor, human path planning, conditional and response-bound actions, cached voice selection, narration pronunciation, audio mastering, pacing analysis, encoder selection, and GOP patching; add `--with-ocr` for OCR evidence or `--with-asr` for pronunciation scoring when the tiny faster-whisper model is cached. The release test checks paired delivery, whole-number silence compaction, flash detection, desktop path planning, signed update checks, a full update from a local release server and where installs keep their backups, engine fallback rules, and narration revisions.
 
 [CI](.github/workflows/ci.yml) runs these checks on Windows, Linux, and macOS for every push and pull request, plus the OCR evidence test on Windows. CI sets `DEMO_VIDEO_NO_UPDATE_CHECK=1`, so bootstrap never contacts the published releases there.
 

@@ -6,7 +6,8 @@
 // folders that agents read from. The manifest counts only when a key in scripts/lib/update-check.mjs
 // verifies its signature, and the archive it names must match the manifest's SHA-256. The archive is
 // unpacked into a new empty folder, and the new copy's install-skill.mjs replaces each host's older
-// copy. install-skill.mjs keeps the replaced copy as a backup; each host keeps only its newest one.
+// copy. install-skill.mjs keeps the replaced copy in ~/.demo_video/backups/<host>, outside the skill
+// folders that hosts load skills from; each host keeps only its newest backup.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,13 +16,12 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { downloadVerified } from './lib/download.mjs';
 import { systemPython } from './lib/python-venv.mjs';
-import { skillHostRoots } from './lib/skill-hosts.mjs';
+import { backupFolder, listBackups, skillHostRoots } from './lib/skill-hosts.mjs';
 import {
   RELEASES_URL, UPDATE_PUBLIC_KEYS, compareVersions, fetchRelease, readSkillVersion, saveUpdateCheck,
 } from './lib/update-check.mjs';
 
 const DOWNLOAD_IDLE_MS = 60_000;
-const BACKUP_PREFIX = 'demo-video.backup-';
 
 /** Each host folder holding demo-video/VERSION, once per real folder. */
 function installedCopies() {
@@ -36,18 +36,14 @@ function installedCopies() {
   });
 }
 
-/** Remove all but the newest backup in a host folder; backup names sort by their timestamp. */
-function pruneBackups(root) {
-  const backups = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(BACKUP_PREFIX))
-    .map((entry) => entry.name)
-    .sort();
-  for (const name of backups.slice(0, -1)) {
+/** Remove all but the newest backup in a backup folder. */
+function pruneBackups(folder) {
+  for (const name of listBackups(folder).slice(0, -1)) {
     try {
-      fs.rmSync(path.join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      fs.rmSync(path.join(folder, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch (error) {
       // A backup still in use is removed by a later update; the new copy is already in place.
-      console.warn(`[update] kept ${path.join(root, name)}: ${error.message}`);
+      console.warn(`[update] kept ${path.join(folder, name)}: ${error.message}`);
     }
   }
 }
@@ -88,7 +84,7 @@ export async function updateSkill({ releasesUrl = RELEASES_URL, publicKeys = UPD
       const install = path.join(await unpackRelease(manifest, releasesUrl, workDir), 'scripts', 'install-skill.mjs');
       for (const copy of outdated) {
         execFileSync(process.execPath, [install, '--force', '--host', copy.host], { stdio: 'inherit' });
-        pruneBackups(copy.root);
+        pruneBackups(backupFolder(copy.root));
         console.log(`[update] ${copy.host}: demo-video ${copy.version} replaced by ${manifest.version}`);
       }
     } finally {

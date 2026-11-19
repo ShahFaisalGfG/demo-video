@@ -23,6 +23,7 @@ Nothing this skill needs - npm packages, the Chromium browser, the Python venv, 
 ├── .demovideo_desktop_venv/ - isolated PyAutoGUI, OpenCV, and NumPy environment for desktop input and deglitching
 ├── scripts/ - this skill's pipeline scripts, kept in sync by bootstrap.mjs
 ├── update-check.json - the result of the last daily update check, which doctor.mjs reports
+├── backups/<host>/ - skill copies replaced by install-skill.mjs --force (destination-<hash>/ for a --destination folder), kept outside the skill folders agents load; update-skill.mjs keeps the newest per host
 └── cache/<project-hash>/<flow>/ - per-run intermediates (audio clips, resolved definitions, raw video before muxing)
 ```
 
